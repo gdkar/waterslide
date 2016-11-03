@@ -25,7 +25,8 @@ ifndef NOPB
   PBDIR = $(WS_LIB_DIR)/protobuflib
   PBBUILD = $(WS_BUILDROOT)/pkg/pbtemp
   PBPKG = protobuf-2.5.0*
-  PBEXE = $(QUIET)$(PBDIR)/bin/protoc
+  PBEXE = protoc
+#$(QUIET)$(PBDIR)/bin/protoc
 endif
 
 ifndef NORE2
@@ -54,7 +55,7 @@ ifndef OPT_LEVEL
   OPT_LEVEL = -O3
 endif
 
-CFLAGS = $(OPT_LEVEL) -Wall -fpic -std=gnu99
+CFLAGS = $(OPT_LEVEL) -Wall -fPIC -std=gnu11
 ifndef WS_STRIPPED
   CFLAGS += -g
 endif
@@ -162,5 +163,6 @@ ifdef WS_PARALLEL
   WS_SFX = .wsp_so
 endif
 
-CPPFLAGS = $(filter-out -std=gnu99, $(CFLAGS))
+CPPFLAGS = $(filter-out -std=gnu11, $(CFLAGS))
+CPPFLAGS += -std=gnu++11
 

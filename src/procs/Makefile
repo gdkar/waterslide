@@ -94,21 +94,25 @@ proc_re2$(WS_SFX): proc_re2.cc
 	$(SHOWFILE) 
 	$(CPP) $(CPPFLAGS) -I$(RE2INCLUDE) $< -o $@ $(RE2LIB)/libre2.a $(LDFLAGS)
 	$(INSTALL) $@ $(WS_PROCS_DIR)
+proc_vectormatchre2$(WS_SFX): proc_vectormatchre2.cc
+	$(SHOWFILE)
+	$(CPP) $(CPPFLAGS) -I$(RE2INCLUDE) $< -o $@ $(RE2LIB)/libre2.a $(LDFLAGS)
+	$(INSTALL) $@ $(WS_PROCS_DIR)
 else
 proc_re2$(WS_SFX): proc_re2.cc
 	@echo " not building $@, unset NORE2 to build"
 endif
 
-ifdef HASDPU
-DPUFLAGS += `pkg-config --cflags funnycar`
-DPULIB   += `pkg-config --libs funnycar`
-proc_dpu$(WS_SFX): proc_dpu.c
+ifdef HASNPU
+NPUFLAGS += `pkg-config --cflags funnycar` 
+NPULIB   += `pkg-config --static --libs funnycar`
+proc_npu$(WS_SFX): proc_npu.c
 	$(SHOWFILE)
-	$(CC) $(CFLAGS) $(DPUFLAGS) $< -o $@ $(DPULIB) $(LDFLAGS)
+	$(CC) $(CFLAGS) $< -o $@  $(NPUFLAGS) $(NPULIB) $(LDFLAGS) -rdynamic -lfunnycar
 	$(INSTALL) $@ $(WS_PROCS_DIR)
 else
-proc_dpu$(WS_SFX): proc_dpu.c
-	@echo " not building $@, set HASDPU=1 to build"
+proc_npu$(WS_SFX): proc_npu.c
+	@echo " not building $@, set HASNPU=1 to build"
 endif
 
 ifdef HASRDKAFKA

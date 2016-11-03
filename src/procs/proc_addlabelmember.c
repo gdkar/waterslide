@@ -51,6 +51,7 @@ proc_example_t proc_examples[]	= {
      {"... | addlabelmember WORD -E VERB | ...","append a tuple member with the label 'WORD' and the value of the 'VERB' environment variable"},
      {"... | addlabelmember SEEN -V 5 | ...","append a tuple member with the label 'SEEN' and the value '5'"},
      {"... | addlabelmember 'LOOKS BAD?' -V 'if you squint' | ...","append a tuple member with the label 'LOOKS BAD?' and the value 'if you squint'"},
+     {"... | addlabelmember COUNTER -c 5 | ...","append label 'COUNTER' to tuple and start counter at 5"},
      {NULL,""}
 };
 char *proc_alias[]	= { "alm", "addlabelm", NULL};
@@ -70,6 +71,8 @@ proc_option_t proc_opts[]	= {
      "set value of new tuple member to that of ENV (use 'env' to list available environment variables)",0,0},
      {'V',"","value",
      "set value of new tuple member to <value> specified by user",0,0},
+     {'c',"","start_value",
+     "set start value of counter to a numeric value specified by user",0,0},
      //the following must be left as-is to signify the end of the array
      {' ',"","",
      "",0,0}
@@ -89,6 +92,8 @@ typedef struct _proc_instance_t {
      wslabel_t * label_out;
      wsdata_t * wsd_newdata;
      char * new_value;
+     uint64_t counter;
+     int iscounter;
 } proc_instance_t;
 
 static int proc_cmd_options(int argc, char ** argv, 
@@ -97,8 +102,9 @@ static int proc_cmd_options(int argc, char ** argv,
      int op;
 
      int got_my_one_value=0;
+     proc->iscounter = 0;
      char * my_one_value=NULL;
-     while ((op = getopt(argc, argv, "E:V:")) != EOF) {
+     while ((op = getopt(argc, argv, "E:V:c:")) != EOF) {
           switch (op) {
           case 'E':
                if (got_my_one_value) {
@@ -116,6 +122,16 @@ static int proc_cmd_options(int argc, char ** argv,
                my_one_value=optarg;
                got_my_one_value=1;
                tool_print("got value %s ", my_one_value);
+               break;
+          case 'c':
+               if (got_my_one_value) {
+                         error_print("only one value can be provided\n");
+                              return 0;
+               }
+               proc->counter=strtol(optarg, NULL, 10);
+               got_my_one_value=1;
+               proc->iscounter=1;
+               tool_print("counter initialized to %" PRIu64, proc->counter);
                break;
           default:
                return 0;
@@ -196,6 +212,12 @@ static inline int add_newdata(proc_instance_t * proc, wsdata_t * tdata,
      return (wsd != NULL);
 }
 
+static inline void  add_counter(proc_instance_t * proc, wsdata_t * tdata) {
+     tuple_member_create_uint64(tdata, proc->counter, proc->label_out);
+     proc->counter++;
+     return;
+}
+
 //// proc processing function assigned to a specific data type in proc_io_init
 //return 1 if output is available
 // return 0 if not output
@@ -212,7 +234,13 @@ static int process_tuple(void * vinstance, wsdata_t* input_data,
           return 0;
      }
 
-     add_newdata(proc, newtupledata,proc->label_out);
+     if (proc->iscounter) {
+          add_counter(proc, newtupledata);
+     }
+     else {
+          add_newdata(proc, newtupledata,proc->label_out);
+     }
+
      ws_set_outdata(newtupledata, proc->outtype_tuple, dout);
      proc->outcnt++;
      return 1;
