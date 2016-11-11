@@ -2,7 +2,7 @@
 
 import time, sys,os, subprocess as sb
 
-target = '/tmp/packets.mpproto'
+target = '/var/packets.mpproto'
 if 'TARGET' in os.environ:
     target = os.environ['TARGET']
 
