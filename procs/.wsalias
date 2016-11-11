@@ -46,6 +46,8 @@ exec_in: exec_in
 exec_in: exec_in
 file_in: file_in
 file_in: file_in
+filemagic: filemagic
+filemagic: filemagic
 fillmissing: fillmissing
 fillmissing: fillmissing
 firstn: first, firstn_shared, first_shared
