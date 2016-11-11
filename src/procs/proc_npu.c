@@ -222,6 +222,7 @@ typedef struct _proc_instance_t {
      uint32_t term_dpu_len;
      int next_1st_pattern_id;
      uint32_t dpuBlockSz;
+     uint32_t dpuStatusSz;
      uint32_t found_match; // XXX: this is intended only for dedicated use by the npu thread
      char * reFilePath;
      char * dpuDevName;
@@ -245,6 +246,7 @@ typedef struct _proc_instance_t {
      pthread_spinlock_t lock;
      int is_bare_regex;
      int is_terrible_hack;
+     int verbosity;
      int pass_all;
      int dpu_thread_stopped;
 } proc_instance_t;
@@ -256,8 +258,23 @@ static int proc_cmd_options(int argc, char ** argv,
      int op;
      int num_match_labels = 0;
 
-     while ((op = getopt(argc, argv, "L:F:D:H:E:BP")) != EOF) {
+     while ((op = getopt(argc, argv, "v::m:L:F:D:H:E:BP")) != EOF) {
           switch (op) {
+          case 'v':
+                if(optarg && *optarg == 'v') {
+                    while(*optarg++ == 'v') {
+                        ++proc->verbosity;
+                    }
+                }else if(optarg) {
+                    proc->verbosity = atoi(optarg);
+                }else{
+                    ++proc->verbosity;
+                }
+               break;
+          case 'm':{
+                    proc->dpuStatusSz = atoi(optarg);
+                }    
+               break;
           case 'H':
                proc->is_terrible_hack = atoi(optarg);
                break;
@@ -502,7 +519,7 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
         error_print("failed to allocate an NPU driver structure.");
         return 0;
      }
-     npu_log_set_level(proc->npuDriver,NPU_VOMIT);
+     npu_log_set_level(proc->npuDriver,(NPULogLevel)((int)NPU_INFO - proc->verbosity));
      if(npu_driver_open(&proc->npuDriver,proc->dpuDevName) < 0) {
           error_print("failed to open NPU hardware device");
           return 0;
@@ -563,7 +580,7 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
             }
         }
         for(uint32_t i = 0; i < proc->term_dpu_len; ++i) {
-            if(npu_pattern_insert_pcre(proc->npuDriver, proc->term_dpu[i].pattern,strlen(proc->term_dpu[i].pattern) + 1,0) < 0) {//, strlen(proc->term_dpu[i].pattern), false) < 0) 
+            if(npu_pattern_insert_pcre(proc->npuDriver, proc->term_dpu[i].pattern,strlen(proc->term_dpu[i].pattern) + 1,"s") < 0) {//, strlen(proc->term_dpu[i].pattern), false) < 0) 
                 error_print("could not insert pattern: '%s'", proc->term_dpu[i].pattern);
             }
         }
@@ -572,7 +589,9 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
 #endif
      status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(proc->npuDriver));
      // initialize our local queue for alloc and dealloc of the callback structure objects
-
+     if(proc->dpuStatusSz) {
+        npu_driver_set_matches(proc->npuDriver, proc->dpuStatusSz);
+     }
      // initialize our queue of metadata
      proc->cbqueue = queue_init();
      if(!proc->cbqueue) {
@@ -701,6 +720,12 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                          // now, send data to DPU hardware
                          while(data_begin_ptr != data_end_ptr) {
                             const char *last_write_ptr = npu_client_write_packet(proc->npuClient, data_begin_ptr, data_end_ptr);
+                            if(!last_write_ptr) {
+                                error_print("npu_client_write_packet failed, %d ", errno);
+                                ++proc->nfail_end;
+                                wsdata_delete(input_data);
+                                return 0;
+                            }
                             data_begin_ptr = last_write_ptr;
                          }
                          // tell the client that we've reached the end of the packet, so it will enqueue the
@@ -709,8 +734,8 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                          while((err = npu_client_end_packet(proc->npuClient)) < 0) {
                               if(err != -EAGAIN) {
                                 error_print("npu_client_end_packet failed");
-                                wsdata_delete(input_data);
                                 ++proc->nfail_end;
+                                wsdata_delete(input_data);
                                 return 0;
                               }
                          }
@@ -862,7 +887,6 @@ int proc_destroy(void * vinstance) {
           if(proc->nfail_end) {
                tool_print("num end packet failure detected %" PRIu64, proc->nfail_end);
           }
-
           if(proc->no_submit_to_dpu) {
                tool_print("outstanding metadata not submitted to DPU thread %" PRIu64, proc->no_submit_to_dpu);
           }
