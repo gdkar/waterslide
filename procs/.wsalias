@@ -46,6 +46,8 @@ exec_in: exec_in
 exec_in: exec_in
 file_in: file_in
 file_in: file_in
+filemagic: filemagic
+filemagic: filemagic
 fillmissing: fillmissing
 fillmissing: fillmissing
 firstn: first, firstn_shared, first_shared
@@ -104,6 +106,8 @@ mklabelset: mklabelset
 mklabelset: mklabelset
 mknest: renest
 mknest: renest
+npu: tdpu, tpu, dpu
+npu: tdpu, tpu, dpu
 print: pmeta, p
 print: pmeta, p
 print2json: pmetajson, pjson
@@ -160,6 +164,8 @@ uniqexpire: expireuniq
 uniqexpire: expireuniq
 untiln: until
 untiln: until
+vectormatchre2: vectorre2
+vectormatchre2: vectorre2
 workbalance: wbalance
 workreceive: wreceive
 writebuffer: writebuffer
