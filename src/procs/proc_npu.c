@@ -588,6 +588,7 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
      npu_pattern_load(proc->npuDriver);
 #endif
      status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(proc->npuDriver));
+     status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(proc->npuDriver),npu_pattern_capacity(proc->npuDriver));
      // initialize our local queue for alloc and dealloc of the callback structure objects
      if(proc->dpuStatusSz) {
         npu_driver_set_matches(proc->npuDriver, proc->dpuStatusSz);
