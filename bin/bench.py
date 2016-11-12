@@ -20,7 +20,6 @@ else:
 #target = ' -r '.join(targets)
 #target = ' -r '.join('../npu2_bench/packets.cut_pt{x:03}.wsproto'.format(x=x) for x in range(1,turbo+1))
 #target_turbo = '../npu2_bench/packets.cut_pt00{{1..{turbo}}}.wsproto'.format(turbo=turbo)
-print('wsproto_in -r {target} | npu CONTENT -F ../npu2_bench/ -H 585 -L RESULT'.format(target=target))
 def run_npu():
     start = time.time()
     retval = sb.call(['./waterslide','wsproto_in -r {target} | npu CONTENT -F ../npu2_bench/ -H 585 -L RESULT'.format(target=target)])
