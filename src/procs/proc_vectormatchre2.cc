@@ -279,8 +279,7 @@ static int proc_cmd_options(int argc, char ** argv,
 
    while (optind < argc) {
       wslabel_set_add(type_table, &proc->lset, argv[optind]);
-      tool_print("searching for string with label %s",
-		 argv[optind]);
+      dprint("searching for string with label %s",argv[optind]);
       optind++;
    }
    
