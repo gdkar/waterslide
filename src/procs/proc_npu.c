@@ -106,20 +106,19 @@ char *proc_tuple_member_labels[] = {"FIRST_MATCHING_PATTERN_ID", "FIRST_MATCHING
 static int proc_process_tuple(void *, wsdata_t*, ws_doutput_t*, int);
 static int proc_flush(void *, wsdata_t*, ws_doutput_t*, int);
 
-#define NPU_MATCH_VECTOR_SIZE 64
+#define NPU_MATCH_VECTOR_SIZE 16
 // struct that contains a pointer to the input_data that we enqueue,
 // whether or not there is a regex match found
 typedef struct _queue_data_t {
-     uint32_t regex_matched; // used to know which data will be labeled as matching
-     uint8_t processed_all_members; // 0 if some members still need to be processed; otherwise, last member processed
      wsdata_t *input_data;
      wsdata_t *member;
      nhqueue_t *q;
      pthread_spinlock_t *mylock;
-
      int match_count;
-     uint8_t overflowed;
+     uint32_t regex_matched; // used to know which data will be labeled as matching
      int match_vector[NPU_MATCH_VECTOR_SIZE];
+     uint8_t overflowed;
+     uint8_t processed_all_members; // 0 if some members still need to be processed; otherwise, last member processed
 //     uint64_t *nregex_matches_ptr; // pointer to global number of regex matches
 //     uint32_t *found_match_ptr;
 } queue_data_t;
@@ -150,7 +149,7 @@ void result_cb_match(void *ep, const npu_result *res) {
      if(res->nmatches) { // we have a match in a block
           dprint("found a match");
           priv->regex_matched += res->nmatches;
-          for(int i = 0; i <res->nmatches && !priv->overflowed; ++i) {
+          for(int i = 0; i < res->nmatches && !priv->overflowed; ++i) {
             int this_match = res->matches[i];
             if(priv->match_count < NPU_MATCH_VECTOR_SIZE)
                 priv->match_vector[priv->match_count++] = this_match;
@@ -685,8 +684,6 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                          qd->q                     = proc->cbqueue;
                          qd->mylock                = &proc->lock;
                          qd->processed_all_members = (nsubmitted == nbinary) ? 1 : 0;
-//                         qd->nregex_matches_ptr = &proc->nregex_matches;
-//                         qd->found_match_ptr    = &proc->found_match;
 
                          // Create a new packet to send to the DPU
                          if(npu_client_new_packet(proc->npuClient, qd, result_cb_match,cleanup_cb_match) < 0) {
@@ -708,13 +705,16 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                               data_begin_ptr = wss->buf;
                               data_end_ptr = wss->buf + wss->len;
                          }
+                         int bail = 0;
                          // now, send data to DPU hardware
                          while(data_begin_ptr != data_end_ptr) {
                             const char *last_write_ptr = npu_client_write_packet(proc->npuClient, data_begin_ptr, data_end_ptr);
                             if(!last_write_ptr) {
                                 error_print("npu_client_write_packet failed, %d ", errno);
                                 ++proc->nfail_end;
-                                return 0;
+                                qd->processed_all_members = 1;
+                                bail = 1;
+                                break;
                             }
                             data_begin_ptr = last_write_ptr;
                          }
@@ -729,8 +729,9 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                               }
                          }
                         input_submitted_to_dpu = 1;
+                        if(bail)
+                            return 0;
                     }
-                    npu_client_flush(proc->npuClient);
                 }
           }
      }
@@ -740,6 +741,7 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
           ++proc->outcnt;
      }
      // STEP 2: check list for any completed jobs (from the DPU hardware), then send data along with memory cleanups
+    npu_client_flush(proc->npuClient);
      uint32_t num_to_process = queue_size(proc->cbqueue); //XXX: retrieve size BEFORE looping for thread-safeness!!!
      for (i = 0; i < num_to_process; i++) {
           pthread_spin_lock(&proc->lock);
