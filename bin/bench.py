@@ -7,13 +7,13 @@ if 'TARGET' in os.environ:
 
 method = sys.argv[1]
 
-target = '../npu2_bench/packets.shortcut.wsproto'
+target = '../npu2_bench/packets.cut.wsproto'
 
 if method == 're2':
     turbo = 1
 else:
     turbo = 6
-    target += ' -r '.join('../npu2_bench/packets.shortcut_pt00{:}.wsproto'.format(x) for x in range(1,6))
+    target = ' -r '.join((target,)+tuple('../npu2_bench/packets.cut_pt00{:}.wsproto'.format(x) for x in range(1,6)))
 
 
 #targets = ['../npu2_bench/packets.cut.wsproto'] + [ '../npu2_bench/packets.cut_pt{:03}.wsproto'.format(x) for x in range(1,turbo)]
