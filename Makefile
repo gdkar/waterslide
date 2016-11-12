@@ -47,7 +47,7 @@ ifneq "$(DIR_ERROR)" "1"
 ifneq "$(wildcard $(WS_LIB_DIR))" ""
 	$(FIND) $(WS_LIB_DIR) -maxdepth 1 -type f -delete 
 endif
-	$(RM) $(WS_BIN_DIR)/* $(WS_PROCS_DIR)/proc_*   
+	$(RM) $(WS_BIN_DIR)/ws* $(WS_BIN_DIR)/waterslide* $(WS_PROCS_DIR)/proc_*   
 	$(RM) -r $(RPM_OUTDIR)
 else
 	@echo "*** Error: problem with distribution directories"
