@@ -111,7 +111,6 @@ static int proc_flush(void *, wsdata_t*, ws_doutput_t*, int);
 // whether or not there is a regex match found
 typedef struct _queue_data_t {
      uint32_t regex_matched; // used to know which data will be labeled as matching
-     uint8_t has_match; // used to know which data will be labeled as matching
      uint8_t processed_all_members; // 0 if some members still need to be processed; otherwise, last member processed
      wsdata_t *input_data;
      wsdata_t *member;
@@ -153,21 +152,12 @@ void result_cb_match(void *ep, const npu_result *res) {
           priv->regex_matched += res->nmatches;
           for(int i = 0; i <res->nmatches && !priv->overflowed; ++i) {
             int this_match = res->matches[i];
-            int found = 0;
-            for(int j = 0; j < priv->match_count;++j) {
-                if(priv->match_vector[j] == this_match) {
-                    found = 1;
-                    break;
-                }
+            if(priv->match_count < NPU_MATCH_VECTOR_SIZE)
+                priv->match_vector[priv->match_count++] = this_match;
+            else {
+                priv->overflowed = 1;
             }
-            if(!found) {
-                if(priv->match_count < NPU_MATCH_VECTOR_SIZE)
-                    priv->match_vector[priv->match_count++] = this_match;
-                else {
-                    priv->overflowed = 1;
-                }
-            }
-          }
+        }
      }
 }
 /*
@@ -180,9 +170,6 @@ void cleanup_cb_match(void *ep) {
      if(priv->regex_matched) {
           dprint("num regex_matched = %u", priv->regex_matched);
 //         *priv->found_match_ptr = 1;
-          priv->has_match = 1;
-     } else {
-          priv->has_match = 0;
      }
      // all DPU processed data are added to the queue for the QK kid thread to post-process
      pthread_spin_lock(priv->mylock);
@@ -211,6 +198,7 @@ typedef struct _proc_instance_t {
      uint64_t outcnt;
      uint64_t noverflow;
      uint64_t nfail;
+     uint64_t nfail_invalid_pid;
      uint64_t nfail_new;
      uint64_t nfail_push;
      uint64_t nfail_end;
@@ -540,8 +528,13 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
             int err = npu_pattern_insert_binary_file(proc->npuDriver,pth);
             if(err < 0)
                 error_print("failed to load binary \"%s\", \'%d\'",pth,err);
+            else if(err >= proc->term_dpu_len) {
+                proc->term_dpu[err].label = proc->label_result;
+                proc->term_dpu[err].pattern = strdup(pth);
+                proc->term_dpu_len = err + 1;
+            }
         }
-        proc->term_dpu_len = npu_pattern_count(proc->npuDriver);
+//        proc->term_dpu_len = npu_pattern_count(proc->npuDriver);
      }else {
         if(proc->is_bare_regex) {
             // plain regexes expected in file, with no labels (and weights)
@@ -686,15 +679,12 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                               wsdata_delete(input_data);
                               return 0;
                          }
-                         qd->has_match             = 0;
-                         qd->processed_all_members = 0;
                          qd->input_data            = input_data;
                          qd->member                = member;
 
                          qd->q                     = proc->cbqueue;
                          qd->mylock                = &proc->lock;
                          qd->processed_all_members = (nsubmitted == nbinary) ? 1 : 0;
-                         qd->regex_matched         = 0;
 //                         qd->nregex_matches_ptr = &proc->nregex_matches;
 //                         qd->found_match_ptr    = &proc->found_match;
 
@@ -707,8 +697,8 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                               return 0;
                          }
                          // extract pointers to the beinnning and end+1 of data buffer
-                         char *data_begin_ptr = NULL;
-                         char *data_end_ptr = NULL;
+                         const char *data_begin_ptr = NULL;
+                         const char *data_end_ptr = NULL;
                          if(members[j]->dtype == dtype_binary) {
                               wsdt_binary_t *wsb = (wsdt_binary_t *)member->data;
                               data_begin_ptr = wsb->buf;
@@ -724,7 +714,6 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                             if(!last_write_ptr) {
                                 error_print("npu_client_write_packet failed, %d ", errno);
                                 ++proc->nfail_end;
-                                wsdata_delete(input_data);
                                 return 0;
                             }
                             data_begin_ptr = last_write_ptr;
@@ -736,14 +725,13 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                               if(err != -EAGAIN) {
                                 error_print("npu_client_end_packet failed");
                                 ++proc->nfail_end;
-                                wsdata_delete(input_data);
                                 return 0;
                               }
                          }
-                         npu_client_flush(proc->npuClient);
-                         input_submitted_to_dpu = 1;
+                        input_submitted_to_dpu = 1;
                     }
-               }
+                    npu_client_flush(proc->npuClient);
+                }
           }
      }
      if(proc->pass_all && !input_submitted_to_dpu) {
@@ -776,7 +764,9 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                          tuple_dupe_string(qd->input_data, proc->label_first_pattern_str, patternstr, strlen(patternstr));
                          proc->next_1st_pattern_id = pattern_id;
                     } else {
-                         ++proc->nfail;
+                        if(pattern_id < 0)
+                            ++proc->nfail;
+                         ++proc->nfail_invalid_pid;
                     }
                }
           }
@@ -815,7 +805,7 @@ static int proc_flush(void * vinstance, wsdata_t* input_data,
           queue_data_t * qd = NULL;
           while ( (qd = (queue_data_t*)queue_remove(proc->cbqueue)) ) {
                if(qd->overflowed)
-                proc->noverflow++;
+                    proc->noverflow++;
                if(qd->match_count) {
                     // add label to tuple member if there is a match
                     tuple_add_member_label(qd->input_data, qd->member, proc->label_result);
@@ -833,7 +823,9 @@ static int proc_flush(void * vinstance, wsdata_t* input_data,
                               tuple_dupe_string(qd->input_data, proc->label_first_pattern_str, patternstr, strlen(patternstr));
                               proc->next_1st_pattern_id = pattern_id;
                          } else {
-                              ++proc->nfail;
+                                if(pattern_id < 0)
+                                    ++proc->nfail;
+                              ++proc->nfail_invalid_pid;
                          }
                     }
                }
@@ -888,9 +880,16 @@ int proc_destroy(void * vinstance) {
           if(proc->nfail_end) {
                tool_print("num end packet failure detected %" PRIu64, proc->nfail_end);
           }
+          if(proc->nfail_invalid_pid) {
+               tool_print("num invalid pid failure detected %" PRIu64, proc->nfail_invalid_pid);
+          }
           if(proc->no_submit_to_dpu) {
                tool_print("outstanding metadata not submitted to DPU thread %" PRIu64, proc->no_submit_to_dpu);
           }
+     }
+     for(int i = 0; i < proc->term_dpu_len; ++i) {
+        free(proc->term_dpu[i].pattern);
+
      }
      //free dynamic allocations
      free(proc->reFilePath);
