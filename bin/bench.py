@@ -7,7 +7,7 @@ if 'TARGET' in os.environ:
 
 method = sys.argv[1]
 
-target = ' -r ../npu2_bench/packets.cut.wsproto '
+target = ' -r ../npu2_bench/packets.cut.wsproto  -r ../npu2_bench/packets.cut_pt001.wsproto  '
 
 if method == 're2':
     turbo = 1
