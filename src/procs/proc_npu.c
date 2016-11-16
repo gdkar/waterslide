@@ -106,7 +106,7 @@ char *proc_tuple_member_labels[] = {"FIRST_MATCHING_PATTERN_ID", "FIRST_MATCHING
 static int proc_process_tuple(void *, wsdata_t*, ws_doutput_t*, int);
 static int proc_flush(void *, wsdata_t*, ws_doutput_t*, int);
 
-#define NPU_MATCH_VECTOR_SIZE 16
+#define NPU_MATCH_VECTOR_SIZE 64
 // struct that contains a pointer to the input_data that we enqueue,
 // whether or not there is a regex match found
 typedef struct _queue_data_t {
@@ -117,10 +117,9 @@ typedef struct _queue_data_t {
      int match_count;
      uint32_t regex_matched; // used to know which data will be labeled as matching
      int match_vector[NPU_MATCH_VECTOR_SIZE];
+     uint32_t status_overflowed;
      uint8_t overflowed;
      uint8_t processed_all_members; // 0 if some members still need to be processed; otherwise, last member processed
-//     uint64_t *nregex_matches_ptr; // pointer to global number of regex matches
-//     uint32_t *found_match_ptr;
 } queue_data_t;
 /*
  * Define the callback structure used for accounting and aiding
@@ -157,6 +156,8 @@ void result_cb_match(void *ep, const npu_result *res) {
                 priv->overflowed = 1;
             }
         }
+        if(res->overflow)
+            priv->status_overflowed++;
      }
 }
 /*
@@ -168,21 +169,11 @@ void cleanup_cb_match(void *ep) {
      queue_data_t *priv = (queue_data_t*)ep;
      if(priv->regex_matched) {
           dprint("num regex_matched = %u", priv->regex_matched);
-//         *priv->found_match_ptr = 1;
      }
      // all DPU processed data are added to the queue for the QK kid thread to post-process
      pthread_spin_lock(priv->mylock);
      queue_add(priv->q, priv);
      pthread_spin_unlock(priv->mylock);
-     // possibly increment number of match count, if we just handled the last member
-/*     if(priv->is_last_member) {
-          if(*priv->found_match_ptr) {
-               *priv->nregex_matches_ptr += 1;
-               *priv->found_match_ptr = 0; // reset for next use
-          }
-     }*/
-     // free back callback structure to our user-managed memory
-//     free(priv);
 }
 
 // a struct object for each pattern to match
@@ -196,6 +187,7 @@ typedef struct _proc_instance_t {
      uint64_t meta_process_cnt;
      uint64_t outcnt;
      uint64_t noverflow;
+     uint64_t nstatus_overflow;
      uint64_t nfail;
      uint64_t nfail_invalid_pid;
      uint64_t nfail_new;
@@ -336,8 +328,8 @@ static int dpumatch_add_element(void *vinstance, void * type_table,
    if (proc->term_dpu_len+1 < LOCAL_MAX_TERMS_SIZE) {
       newlab = wsregister_label(type_table, labelstr);
       uint32_t match_id = proc->term_dpu_len;
-      proc->term_dpu[match_id].pattern = strdup(restr);
       proc->term_dpu[match_id].length  = strlen(restr) + 1;
+      proc->term_dpu[match_id].pattern = strdup(restr);
       proc->term_dpu[match_id].label = newlab;
       proc->term_dpu_len++;
    } else {
@@ -539,7 +531,7 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
             // plain regexes expected in file, with no labels (and weights)
             FILE *fp;
             size_t guessmaxlen = 1024, read = 0;
-            char * regex_line = (char *)malloc(guessmaxlen);
+            char * regex_line = (char *)calloc(guessmaxlen,1);
             if ((fp = fopen(proc->reFilePath, "r")) == NULL)
             {
                 error_print("could not open file '%s'", proc->reFilePath);
@@ -741,7 +733,7 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
           ++proc->outcnt;
      }
      // STEP 2: check list for any completed jobs (from the DPU hardware), then send data along with memory cleanups
-    npu_client_flush(proc->npuClient);
+//     npu_client_flush(proc->npuClient);
      uint32_t num_to_process = queue_size(proc->cbqueue); //XXX: retrieve size BEFORE looping for thread-safeness!!!
      for (i = 0; i < num_to_process; i++) {
           pthread_spin_lock(&proc->lock);
@@ -749,6 +741,7 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
           pthread_spin_unlock(&proc->lock);
           if(qd->overflowed)
                 proc->noverflow++;
+          proc->nstatus_overflow += qd->status_overflowed;
           if(qd->regex_matched && qd->match_count) {
                // add label to tuple member if there is a match
                tuple_add_member_label(qd->input_data, qd->member, proc->label_result);
@@ -786,13 +779,14 @@ static int proc_process_tuple(void * vinstance, wsdata_t* input_data,
                proc->found_match = 0;
                proc->next_1st_pattern_id = PATTERN_ID_NOT_SET; // reset for next use
                wsdata_delete(qd->input_data);
-               free(qd);
           }
+          free(qd);
      }
      return 1;
 }
 static int proc_flush(void * vinstance, wsdata_t* input_data,
-                      ws_doutput_t * dout, int type_index) {
+                      ws_doutput_t * dout, int type_index)
+{
      proc_instance_t * proc = (proc_instance_t*)vinstance;
      if (dtype_is_exit_flush(input_data)) {
           npu_client_flush(proc->npuClient);
@@ -843,10 +837,10 @@ static int proc_flush(void * vinstance, wsdata_t* input_data,
                     }
                     // remove the reference we added before enqueue'ing for the DPU hardware
                     wsdata_delete(qd->input_data);
-                    free(qd);
                     proc->found_match = 0;
                     proc->next_1st_pattern_id = PATTERN_ID_NOT_SET; // reset for next use
                }
+               free(qd);
           }
      }
      return 1;
@@ -870,6 +864,9 @@ int proc_destroy(void * vinstance) {
           if(proc->noverflow) {
                tool_print("number of overflowed queue items %" PRIu64, proc->noverflow);
           }
+          if(proc->nstatus_overflow) {
+               tool_print("number of overflowed status items %" PRIu64, proc->nstatus_overflow);
+            }
           if(proc->nfail) {
                tool_print("num failure detected %" PRIu64, proc->nfail);
           }
