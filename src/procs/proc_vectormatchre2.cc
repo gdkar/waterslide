@@ -14,13 +14,17 @@
 #define PROC_NAME "vectormatchre2"
 //#define DEBUG 1
 
-#include <stdlib.h>
-#include <stdint.h>
-#include <stdio.h>
+#include <cstdlib>
+#include <cstdint>
+#include <cstdio>
 #include <unistd.h>
-#include <ctype.h>
-#include <math.h>   //sqrt
-#include <errno.h>  //errno
+#include <cctype>
+#include <cmath>   //sqrt
+#include <numeric>   //sqrt
+#include <algorithm>   //sqrt
+#include <utility>   //sqrt
+#include <functional>   //sqrt
+#include <cerrno>  //errno
 #include <re2/re2.h>
 #include "waterslide.h"
 #include "datatypes/wsdt_fixedstring.h"
@@ -33,11 +37,6 @@
 #include "label_match.h"  
 #include "sysutil.h"  //sysutil_config_fopen
 
-#ifdef __cplusplus
-CPP_OPEN
-#endif
-
-
 /*-----------------------------------------------------------------------------
  *                           D E F I N E S
  *---------------------------------------------------------------------------*/
@@ -48,16 +47,56 @@ CPP_OPEN
 /*-----------------------------------------------------------------------------
  *                           G L O B A L S
  *---------------------------------------------------------------------------*/
-char proc_name[]       = PROC_NAME;
-char proc_version[]    = "1.0";
-const char *proc_alias[]     = { "vectorre2", NULL };
-#ifdef MP_DOCS
-const char *proc_tags[]     = { "match", "vector", NULL };
-char proc_purpose[]    = "matches a list of regular expressions and returns a vector";
-const char *proc_synopsis[] = {
+extern "C" const char proc_name[];
+extern "C" const proc_labeloffset_t proc_labeloffset[];
+extern "C" const char *const proc_alias[];
+extern "C" const char *const proc_tags[];
+extern "C" const char  proc_purpose[];
+extern "C" const char  proc_description[];
+extern "C" const char  *const proc_synopsis[];
+extern "C" const proc_example_t proc_examples[];
+extern "C" const proc_option_t proc_opts[];
+extern "C" const char proc_nonswitch_opts[];
+extern "C" const char *const proc_input_types[]    ;  //removed "npacket"
+extern "C" const char *const proc_output_types[]    ; //removed "npacket"
+extern "C" const char *const proc_tuple_member_labels[] ;
+extern "C" const char proc_requires[] ;
+extern "C" const char *const proc_tuple_container_labels[] ;
+extern "C" const char *const proc_tuple_conditional_container_labels[] ;
+extern "C" const proc_port_t proc_input_ports[];
+
+
+ 
+extern "C" int proc_init(
+    wskid_t * kid
+  , int argc
+  , char ** argv
+  , void ** vinstance
+  , ws_sourcev_t * sv
+  , void * type_table
+    );
+
+extern "C" proc_process_t proc_input_set(
+    void * vinstance
+  , wsdatatype_t * input_type
+  , wslabel_t * port
+  , ws_outlist_t* olist
+  , int type_index
+  , void * type_table
+    );
+extern "C" int proc_destroy(
+    void * vinstance
+    );
+ 
+const char proc_name[] = PROC_NAME;
+const char proc_version[]    = "1.0";
+const char * const proc_alias[]     = { "vectorre2", NULL };
+const char *const proc_tags[]     = { "match", "vector", NULL };
+const char proc_purpose[]    = "matches a list of regular expressions and returns a vector";
+const char *const proc_synopsis[] = {
      "vectormatchre2 [-V <label>] -F <file> [-L <label>] [-W] <label of string member to match>",
      NULL };
-char proc_description[] =
+const char proc_description[] =
    "vectormatchre2 extends vectormatch to perform regular "
    "expression matching.  vectormatchre2 will produce a vector of doubles "
    "representing which patterns were matched.\n"
@@ -75,7 +114,7 @@ char proc_description[] =
    "\"union\"       (SQL_UNION)       1.0\n"
    "\n";
 
-proc_example_t proc_examples[] = {
+const proc_example_t proc_examples[] = {
    {"...| vectormatchre2 -F \"re.txt\" -V MY_VECTOR MY_STRING |...\n",
    "match the MY_STRING tuple member against the regular expressions in re.txt.  "
    "Create a vector of the results and create a new vector of doubles under the "
@@ -92,7 +131,7 @@ proc_example_t proc_examples[] = {
    {NULL,""}
 };   
 
-proc_option_t proc_opts[] = {
+const proc_option_t proc_opts[] = {
      /*  'option character', "long option string", "option argument",
 	 "option description", <allow multiple>, <required>*/
      {'V',"","label",
@@ -117,23 +156,20 @@ proc_option_t proc_opts[] = {
      {' ',"","",
      "",0,0}
 };
-char proc_nonswitch_opts[]    = "LABEL of string member to match";
-const char *proc_input_types[]    = {"tuple", NULL};  //removed "npacket"
-const char *proc_output_types[]    = {"tuple", NULL}; //removed "npacket"
-char *proc_tuple_member_labels[] = {NULL};
-char proc_requires[] = "";
-char *proc_tuple_container_labels[] = {NULL};
-char *proc_tuple_conditional_container_labels[] = {NULL};
+const char proc_nonswitch_opts[]    = "LABEL of string member to match";
+const char *const proc_input_types[]    = {"tuple", NULL};  //removed "npacket"
+const char *const proc_output_types[]    = {"tuple", NULL}; //removed "npacket"
+const char *const proc_tuple_member_labels[] = {NULL};
+const char proc_requires[] = "";
+const char *const proc_tuple_container_labels[] = {NULL};
+const char *const proc_tuple_conditional_container_labels[] = {NULL};
 
 
-extern int errno;
-
-proc_port_t proc_input_ports[] = {
+const proc_port_t proc_input_ports[] = {
      {"none","pass if match"},
      {"TAG","pass all, label tuple if match"},
      {NULL, NULL}
 };
-#endif //MP_DOCS
 
 /*-----------------------------------------------------------------------------
  *                  D A T A   S T R U C T   D E F S 
@@ -175,6 +211,12 @@ typedef struct _proc_instance_t {
 
 } proc_instance_t;
 
+const proc_labeloffset_t proc_labeloffset[] = {};
+/*{
+    {"MATCH",offsetof(proc_instance_t, matched_label)},
+    {"VECTOR",offsetof(proc_instance_t,vector_name)},
+    {"",0},
+};*/
 
 /*-----------------------------------------------------------------------------
  *                  F U N C T I O N   P R O T O S
@@ -937,8 +979,3 @@ static int vectormatch_loadfile(void* vinstance, void* type_table,
 
    return 1;
 }
-
-#ifdef __cplusplus
-CPP_CLOSE
-#endif
-

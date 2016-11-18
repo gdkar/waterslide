@@ -62,9 +62,6 @@ using namespace funny_car;
 
 
 
-extern "C" const char proc_name[];
-extern "C" const proc_labeloffset_t proc_labeloffset[];
-extern "C" const char *const proc_alias[];
 extern "C" int proc_init(
     wskid_t * kid
   , int argc
@@ -90,18 +87,18 @@ extern "C" int proc_destroy(
  *                  G L O B A L S
  *---------------------------------------------------------------------------*/
 
-const char proc_name[]        = PROC_NAME;
-const char proc_version[]     = "0.1";
-const char * const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
+extern "C" char proc_name[]        = PROC_NAME;
+extern "C" char proc_version[]     = "0.1";
+extern "C" char * proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
-#ifdef MP_DOCS
-const char *const proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
-const char proc_purpose[]     = "matches a list of regular expressions and returns a vector";
-const char *const proc_synopsis[] = {
+#if defined (MP_DOCS) || true
+extern "C" char *proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
+extern "C" char proc_purpose[]     = "matches a list of regular expressions and returns a vector";
+extern "C" char *proc_synopsis[] = {
     "vectormatchnpu [-V <label>] -F <file> [-L <label>] [-W] <label of string member to match>"
   , nullptr
     };
-const char proc_description[] =
+extern "C" char proc_description[] =
     "vectormatchnpu extends vectormatch to perform regular "
     "expression matching.  vectormatchnpu will produce a vector of doubles "
     "representing which patterns were matched.\n"
@@ -119,7 +116,7 @@ const char proc_description[] =
     "\"union\"      (SQL_UNION)  1.0\n"
     "\n";
 
-const proc_example_t proc_examples[] = {
+extern "C" proc_example_t proc_examples[] = {
     {"...| vectormatchnpu -F \"re.txt\" -V MY_VECTOR MY_STRING |...\n",
     "match the MY_STRING tuple member against the regular expressions in re.txt.    "
     "Create a vector of the results and create a new vector of doubles under the "
@@ -136,7 +133,7 @@ const proc_example_t proc_examples[] = {
     {NULL,""}
 };
 
-const proc_option_t proc_opts[] = {
+extern "C" proc_option_t proc_opts[] = {
     /*  'option character', "long option string", "option argument",
     "option description", <allow multiple>, <required>*/
     {'V',"","label",
@@ -150,7 +147,7 @@ const proc_option_t proc_opts[] = {
     {'W',"","",
     "use weighted counts",0,0},
     {'D',"","device",
-    "device file to use.",0,0}
+    "device file to use.",0,0},
     /*
      {'T',"","",
      "tag flows that match (npacket only)",0,0},
@@ -163,15 +160,15 @@ const proc_option_t proc_opts[] = {
     {' ',"","",
     "",0,0}
 };
-const char proc_nonswitch_opts[]               = "LABEL of string member to match";
-const char *const proc_input_types[]           = {"tuple","flush", nullptr};  //removed "npacket"
-const char *const proc_output_types[]          = {"tuple", nullptr}; //removed "npacket"
-const char *const proc_tuple_member_labels[]    = {nullptr};
-const char proc_requires[]              = "";
-const char *const proc_tuple_container_labels[] = {nullptr};
-const char *const proc_tuple_conditional_container_labels[] = {nullptr};
+extern "C" char proc_nonswitch_opts[]               = "LABEL of string member to match";
+extern "C" char *proc_input_types[]           = {"tuple","flush", nullptr};  //removed "npacket"
+extern "C" char *proc_output_types[]          = {"tuple", nullptr}; //removed "npacket"
+extern "C" char *proc_tuple_member_labels[]    = {nullptr};
+extern "C" char proc_requires[]              = "";
+extern "C" char *proc_tuple_container_labels[] = {nullptr};
+extern "C" char *proc_tuple_conditional_container_labels[] = {nullptr};
 
-const proc_port_t proc_input_ports[] = {
+extern "C" proc_port_t proc_input_ports[] = {
     {"none","pass if match"},
     {"TAG","pass all, label tuple if match"},
     {nullptr, nullptr}
