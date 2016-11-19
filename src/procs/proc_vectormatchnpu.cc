@@ -142,7 +142,7 @@ extern "C" proc_option_t proc_opts[] = {
     {'V',"","label",
     "attach vector and tag with <label>",0,0},
     {'F',"","file",
-    "(required) file with items to search",0,0},
+    "file with items to search",0,0},
     {'M',"","",
     "affix keyword label to matching tuple member",0,0},
     {'L',"","",
@@ -256,6 +256,7 @@ struct vectormatch_proc {
             callback_batch
             >
         > cb_queue;
+    bool                              got_match{false};
     npu_driver                       *driver{};
     npu_client                       *client{};
     int verbosity{};
@@ -308,8 +309,10 @@ vectormatch_proc::~vectormatch_proc()
             auto &qd = cb_queue.front()->front();
             if(!qd.is_done.load())
                 continue;
-            if(qd.matches)
+            if(qd.matches) {
                 hits++;
+                got_match = true;
+            }
             if(qd.hw_overflow)
                 hw_overflow++;
             if(qd.qd_overflow)
@@ -344,6 +347,7 @@ vectormatch_proc::~vectormatch_proc()
                 wsdata_delete(qd.input_data);
             }
             cb_queue.front()->pop_front();
+            got_match = false;
         }
     }
     tool_print("meta_proc cnt %" PRIu64, meta_process_cnt);
@@ -472,7 +476,7 @@ int vectormatch_proc::cmd_options(
         }
     }
 
-    if (!F_opt) {
+    if (term_vector.empty()) {
         tool_print("ERROR: -F <filename> option is required.");
         exit(-1);
     }
@@ -741,8 +745,10 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
             auto &qd = cb_queue.front()->front();
             if(!qd.is_done.load())
                 continue;
-            if(qd.matches)
+            if(qd.matches) {
                 hits++;
+                got_match = true;
+            }
             if(qd.hw_overflow)
                 hw_overflow++;
             if(qd.qd_overflow)
@@ -779,11 +785,12 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
                 add_vector(qd.input_data);
 
             if(qd.is_last) {
-                if(dout && qd.nmatches || pass_all) {
+                if(dout && (got_match || pass_all)) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
                 wsdata_delete(qd.input_data);
+                got_match = false;
             }
             cb_queue.front()->pop_front();
         }
@@ -874,8 +881,10 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
             if(!qd.is_done.load())
                 break;
             found += qd.nmatches;
-            if(qd.matches)
+            if(qd.matches) {
                 hits++;
+                got_match = true;
+            }
             max_status = std::max<int>(max_status,qd.nmatches);
             if(qd.hw_overflow)
                 hw_overflow++;
@@ -905,12 +914,13 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                 add_vector(qd.input_data);
 
             if(qd.is_last ){
-                if(qd.nmatches || pass_all) {
+                if(got_match || pass_all) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
                 reset_counts();
                 wsdata_delete(qd.input_data);
+                got_match = false;
             }
             cb_queue.front()->pop_front();
         }
@@ -1020,8 +1030,10 @@ int vectormatch_proc::process_allstr(
                 hw_overflow++;
             if(qd.qd_overflow)
                 qd_overflow++;
-            if(qd.nmatches)
+            if(qd.nmatches) {
                 hits++;
+                got_match = true;
+            }
             for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
                 term_vector[mval].count++;
@@ -1046,12 +1058,13 @@ int vectormatch_proc::process_allstr(
                 add_vector(qd.input_data);
 
             if(qd.is_last){
-                if(qd.nmatches || pass_all) {
+                if(got_match || pass_all) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
                 reset_counts();
                 wsdata_delete(qd.input_data);
+                got_match = false;
             }
             cb_queue.front()->pop_front();
         }
