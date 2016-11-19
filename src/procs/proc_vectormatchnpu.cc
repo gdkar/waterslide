@@ -20,6 +20,9 @@
 #include <mutex>
 #include <cstdint>
 #include <cstdio>
+#include <sstream>
+#include <iostream>
+#include <fstream>
 #include <cstring>
 #include <unistd.h>
 #include <cctype>
@@ -148,6 +151,13 @@ extern "C" proc_option_t proc_opts[] = {
     "use weighted counts",0,0},
     {'D',"","device",
     "device file to use.",0,0},
+    {'E',"","expression",
+    "provide a pcre expression to match against..",1,0},
+    {'B',"","binary",
+    "provide a filename of a npu binary to match with.",1,0},
+    {'m',"","matches",
+    "configure the number of matches to return per status.",0,0},
+
     /*
      {'T',"","",
      "tag flows that match (npacket only)",0,0},
@@ -249,6 +259,7 @@ struct vectormatch_proc {
     npu_driver                       *driver{};
     npu_client                       *client{};
     int verbosity{};
+    int status_size{1};
     bool weighted_counts{}; /* should we weight the counts? */
     bool label_members{}; /* 1 if we should labels matched members*/
     bool pass_all{}; /* 1 if we should labels matched members*/
@@ -368,7 +379,7 @@ int vectormatch_proc::cmd_options(
 //    matched_label = wsregister_label(type_table, "RESULT");
     vector_name   = wsregister_label(type_table, "VECTOR");
 
-    while ((op = getopt(argc, argv, "D:v::WV:F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "m:B:E:D:v::WV:F:L:M")) != EOF) {
         switch (op) {
           case 'v':
                 if(optarg && *optarg == 'v') {
@@ -384,6 +395,22 @@ int vectormatch_proc::cmd_options(
 
             case 'M':{  /* label tuple data members that match */
                 label_members = true;
+                break;
+            }
+            case 'm':{  /* label tuple data members that match */
+                std::istringstream{optarg} >> status_size;
+                break;
+            }
+            case 'E':{  /* label tuple data members that match */
+                if (!add_element(type_table, optarg, strlen(optarg)+1,nullptr, 1.)) {
+                    tool_print("problem adding expression %s\n", optarg);
+                }
+                break;
+            }
+            case 'B':{  /* label tuple data members that match */
+                if (!add_element(type_table, optarg,0,nullptr, 1.)) {
+                    tool_print("problem adding expression %s\n", optarg);
+                }
                 break;
             }
             case 'D':{  /* label tuple data members that match */
@@ -508,7 +535,7 @@ int vectormatch_proc::cmd_options(
           error_print("could not crete a client for holding reference to npuDriver");
           return 0;
      }
-     npu_driver_set_matches(driver, 3);
+     npu_driver_set_matches(driver, status_size);
      if(npu_thread_start(driver) < 0) {
           error_print("could not start DPU thread");
           return 0;
@@ -721,7 +748,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
             if(qd.qd_overflow)
                 qd_overflow++;
             max_status = std::max<int>(max_status,qd.nmatches);
-            for(auto i = 0; i < qd.nmatches; ++i) {
+            for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
                 term_vector[mval].count+= 1;
                 //i.e., is there a tuple member we are going to add to?
@@ -854,7 +881,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                 hw_overflow++;
             if(qd.qd_overflow)
                 qd_overflow++;
-            for(auto i = 0; i < qd.nmatches; ++i) {
+            for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
                 term_vector[mval].count++;
                 //i.e., is there a tuple member we are going to add to?
@@ -995,7 +1022,7 @@ int vectormatch_proc::process_allstr(
                 qd_overflow++;
             if(qd.nmatches)
                 hits++;
-            for(auto i = 0; i < qd.nmatches; ++i) {
+            for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
                 term_vector[mval].count++;
                 //i.e., is there a tuple member we are going to add to?
