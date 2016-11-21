@@ -65,7 +65,8 @@ using namespace funny_car;
 
 
 
-extern "C" int proc_init(
+extern "C" {
+int proc_init(
     wskid_t * kid
   , int argc
   , char ** argv
@@ -74,7 +75,7 @@ extern "C" int proc_init(
   , void * type_table
     );
 
-extern "C" proc_process_t proc_input_set(
+proc_process_t proc_input_set(
     void * vinstance
   , wsdatatype_t * input_type
   , wslabel_t * port
@@ -82,26 +83,26 @@ extern "C" proc_process_t proc_input_set(
   , int type_index
   , void * type_table
     );
-extern "C" int proc_destroy(
+int proc_destroy(
     void * vinstance
     );
-
+}
 /*-----------------------------------------------------------------------------
  *                  G L O B A L S
  *---------------------------------------------------------------------------*/
 
-extern "C" char proc_name[]        = PROC_NAME;
-extern "C" char proc_version[]     = "0.1";
-extern "C" char * proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
+extern "C" const char proc_name[]        = PROC_NAME;
+extern "C" const char proc_version[]     = "0.1";
+extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
-extern "C" char *proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
-extern "C" char proc_purpose[]     = "matches a list of regular expressions and returns a vector";
-extern "C" char *proc_synopsis[] = {
+extern "C" const char *const proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
+extern "C" const char proc_purpose[]     = "matches a list of regular expressions and returns a vector";
+extern "C" const char *const proc_synopsis[] = {
     "vectormatchnpu [-V <label>] -F <file> [-L <label>] [-W] <label of string member to match>"
   , nullptr
     };
-extern "C" char proc_description[] =
+extern "C" const char proc_description[] =
     "vectormatchnpu extends vectormatch to perform regular "
     "expression matching.  vectormatchnpu will produce a vector of doubles "
     "representing which patterns were matched.\n"
@@ -119,7 +120,7 @@ extern "C" char proc_description[] =
     "\"union\"      (SQL_UNION)  1.0\n"
     "\n";
 
-extern "C" proc_example_t proc_examples[] = {
+extern "C" const proc_example_t proc_examples[] = {
     {"...| vectormatchnpu -F \"re.txt\" -V MY_VECTOR MY_STRING |...\n",
     "match the MY_STRING tuple member against the regular expressions in re.txt.    "
     "Create a vector of the results and create a new vector of doubles under the "
@@ -136,7 +137,7 @@ extern "C" proc_example_t proc_examples[] = {
     {NULL,""}
 };
 
-extern "C" proc_option_t proc_opts[] = {
+extern "C" const proc_option_t proc_opts[] = {
     /*  'option character', "long option string", "option argument",
     "option description", <allow multiple>, <required>*/
     {'V',"","label",
@@ -170,15 +171,15 @@ extern "C" proc_option_t proc_opts[] = {
     {' ',"","",
     "",0,0}
 };
-extern "C" char proc_nonswitch_opts[]               = "LABEL of string member to match";
-extern "C" char *proc_input_types[]           = {"tuple","flush", nullptr};  //removed "npacket"
-extern "C" char *proc_output_types[]          = {"tuple", nullptr}; //removed "npacket"
-extern "C" char *proc_tuple_member_labels[]    = {nullptr};
-extern "C" char proc_requires[]              = "";
-extern "C" char *proc_tuple_container_labels[] = {nullptr};
-extern "C" char *proc_tuple_conditional_container_labels[] = {nullptr};
+extern "C" const char proc_nonswitch_opts[]               = "LABEL of string member to match";
+extern "C" const char *const proc_input_types[]           = {"tuple","flush", nullptr};  //removed "npacket"
+extern "C" const char *const proc_output_types[]          = {"tuple", nullptr}; //removed "npacket"
+extern "C" const char *const proc_tuple_member_labels[]    = {nullptr};
+extern "C" const char proc_requires[]              = "";
+extern "C" const char *const proc_tuple_container_labels[] = {nullptr};
+extern "C" const char *const proc_tuple_conditional_container_labels[] = {nullptr};
 
-extern "C" proc_port_t proc_input_ports[] = {
+extern "C" const proc_port_t proc_input_ports[] = {
     {"none","pass if match"},
     {"TAG","pass all, label tuple if match"},
     {nullptr, nullptr}
@@ -508,7 +509,7 @@ int vectormatch_proc::cmd_options(
                 error_print("failed to open to insert pattern %s", term.pattern.c_str());
                 continue;
             }
-            if(pattern_id >= term_vector.size())
+            if((size_t)pattern_id >= term_vector.size())
                 term_vector.resize(pattern_id+1);
             term_vector[pattern_id] = term;
             tool_print("Loaded string '%s' label '%s' weight '%g' -> %d",
@@ -522,7 +523,7 @@ int vectormatch_proc::cmd_options(
                 error_print("failed to open to insert pattern %s", term.pattern.c_str());
                 continue;
             }
-            if(pattern_id >= term_vector.size())
+            if((size_t)pattern_id >= term_vector.size())
                 term_vector.resize(pattern_id+1);
             std::swap(term_vector[pattern_id], term);
             tool_print("Loaded string '%s' label '%s' weight '%g' -> %d",
@@ -667,7 +668,6 @@ static void cleanup_cb(void *opaque)
  *---------------------------------------------------------------------------*/
 void vectormatch_proc::reset_counts()
 {
-    unsigned int i=0;
     for(auto & term : term_vector)
         term.count = 0;
 }
@@ -678,22 +678,20 @@ void vectormatch_proc::reset_counts()
  *---------------------------------------------------------------------------*/
 int vectormatch_proc::add_vector(wsdata_t* input_data)
 {
-    unsigned int i;
-    auto dt = (wsdt_vector_double_t*)tuple_member_create(input_data,
+    if(auto dt = (wsdt_vector_double_t*)tuple_member_create(input_data,
              dtype_vector_double,
-             vector_name);
+             vector_name)) {
 
-    if (!dt)
-        return 0; /* most likely the tuple is full */
+        for(auto &&term : term_vector) {
+            auto count = (double)term.count;
+            if(weighted_counts)
+                count *= term.weight;
+            wsdt_vector_double_insert(dt, count);
+        }
 
-    for(auto &&term : term_vector) {
-        auto count = (double)term.count;
-        if(weighted_counts)
-            count *= term.weight;
-        wsdt_vector_double_insert(dt, count);
+        return 1;
     }
-
-    return 1;
+    return 0; /* most likely the tuple is full */
 }
 
 
@@ -802,18 +800,17 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
     meta_process_cnt++;
     wsdata_t ** members;
     int members_len;
-    int i, j;
     int found = 0;
     auto submitted = false;
     /* lset - the list of labels we will be searching over.
     * Iterate over these labels and call match on each of them */
     auto bail = false;
-    for (i = 0; i < lset.len && !bail; i++) {
+    for (auto i = 0; i < lset.len && !bail; i++) {
         if (tuple_find_label(input_data, lset.labels[i], &members_len,&members)){
             auto nbin = 0;
             auto nsub = 0;
 
-            for(j = 0; j < members_len; ++j) {
+            for(auto j = 0; j < members_len; ++j) {
                 if(members[j]->dtype == dtype_binary
                 || members[j]->dtype == dtype_string)
                     ++nbin;
@@ -821,7 +818,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
             if(nbin) {
                 wsdata_add_reference(input_data);
                 submitted = true;
-                for(j = 0; j < members_len && !bail; ++j) {
+                for(auto j = 0; j < members_len && !bail; ++j) {
                     auto member = members[j];
                     if(cb_queue.empty() || cb_queue.back()->full()) {
                         cb_queue.emplace_back(new callback_batch());
@@ -946,8 +943,7 @@ int vectormatch_proc::process_allstr(
 
 
     meta_process_cnt++;
-    int i, j;
-    int found = 0;
+    auto found = 0;
     auto submitted = false;
     /* lset - the list of labels we will be searching over.
     * Iterate over these labels and call match on each of them */
@@ -959,14 +955,14 @@ int vectormatch_proc::process_allstr(
     auto nbin = 0;
     auto nsub = 0;
 
-    for(j = 0; j < members_len; ++j) {
+    for(auto j = 0; j < members_len; ++j) {
         if(members[j]->dtype == dtype_binary
         || members[j]->dtype == dtype_string)
             ++nbin;
     }
     if(nbin) {
         wsdata_add_reference(input_data);
-        for(j = 0; j < members_len && !bail; ++j) {
+        for(auto j = 0; j < members_len && !bail; ++j) {
             auto member = members[j];
             if(cb_queue.empty() || cb_queue.back()->full()) {
                 cb_queue.emplace_back(new callback_batch());

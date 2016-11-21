@@ -103,8 +103,8 @@ proc_re2$(WS_SFX): proc_re2.cc
 	@echo " not building $@, unset NORE2 to build"
 endif
 ifdef HASNPU2
-NPU2FLAGS += `pkg-config --cflags funnycar` 
-NPU2LIB   += `pkg-config --static --libs funnycar`
+NPU2FLAGS += $(filter-out -std=gnu11,$(shell pkg-config --cflags funnycar))
+NPU2LIB   += $(shell pkg-config --static --libs funnycar)
 proc_vectormatchnpu$(WS_SFX): proc_vectormatchnpu.cc
 	$(SHOWFILE)
 	$(CPP) $(CPPFLAGS) $< -o $@  $(NPU2FLAGS) $(NPU2LIB) $(LDFLAGS) -rdynamic -lfunnycar
