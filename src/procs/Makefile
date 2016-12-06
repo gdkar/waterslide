@@ -98,6 +98,11 @@ proc_vectormatchre2$(WS_SFX): proc_vectormatchre2.cc
 	$(SHOWFILE)
 	$(CPP) $(CPPFLAGS) -I$(RE2INCLUDE) $< -o $@ $(RE2LIB)/libre2.a $(LDFLAGS)
 	$(INSTALL) $@ $(WS_PROCS_DIR)
+proc_parmatchre2$(WS_SFX): proc_parmatchre2.cc
+	$(SHOWFILE)
+	$(CPP) $(CPPFLAGS) -I$(RE2INCLUDE) $< -o $@ $(RE2LIB)/libre2.a $(LDFLAGS)
+	$(INSTALL) $@ $(WS_PROCS_DIR)
+
 else
 proc_re2$(WS_SFX): proc_re2.cc
 	@echo " not building $@, unset NORE2 to build"
@@ -114,6 +119,17 @@ proc_vectormatchnpu$(WS_SFX): proc_vectormatchnpu.cc
 	@echo " not building $@, set HASNPU2=1 to build"
 endif
 
+ifdef HASPCAP
+PCAPFLAGS =
+PCAPLIB = -lpcap
+proc_pcap_in$(WS_SFX): proc_pcap_in.cc
+	$(SHOWFILE)
+	$(CPP) $(CPPFLAGS) $< -o $@ $(PCAPLIB) $(LDFLAGS) -lpcap
+	$(INSTALL) $@ $(WS_PROCS_DIR)
+else
+proc_pcap_in$(WS_SFX): proc_pcap_in.cc
+	@echo " not building $@, set HASPCAP=1 to build"
+endif
 ifdef HASNPU
 NPUFLAGS += `pkg-config --cflags funnycar` 
 NPULIB   += `pkg-config --static --libs funnycar`
