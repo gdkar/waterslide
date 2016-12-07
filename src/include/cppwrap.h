@@ -27,7 +27,14 @@ SOFTWARE.
 #define _CPPWRAP_H
 
 // avoid confusing context-sensitive editors
+#ifdef __cplusplus
 #define CPP_OPEN extern "C" {
 #define CPP_CLOSE }
+#define WS_EXTERN extern "C"
+#else
+#define CPP_OPEN
+#define CPP_CLOSE
+#define WS_EXTERN extern
+#endif
 
 #endif // _CPPWRAP_H

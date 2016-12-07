@@ -158,6 +158,8 @@ extern "C" const proc_option_t proc_opts[] = {
     "provide a filename of a npu binary to match with.",1,0},
     {'m',"","matches",
     "configure the number of matches to return per status.",0,0},
+    {'P',"","matches",
+    "pass all packets",0,0},
 
     /*
      {'T',"","",
@@ -264,7 +266,7 @@ struct vectormatch_proc {
     int status_size{1};
     bool weighted_counts{}; /* should we weight the counts? */
     bool label_members{}; /* 1 if we should labels matched members*/
-    bool pass_all{}; /* 1 if we should labels matched members*/
+    bool pass_all{false}; /* 1 if we should labels matched members*/
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
    ~vectormatch_proc();
@@ -382,9 +384,9 @@ int vectormatch_proc::cmd_options(
     int F_opt = 0;
     pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 //    matched_label = wsregister_label(type_table, "RESULT");
-    vector_name   = wsregister_label(type_table, "VECTOR");
+//    vector_name   = wsregister_label(type_table, "VECTOR");
 
-    while ((op = getopt(argc, argv, "m:B:E:D:v::WV:F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "Pm:B:E:D:v::WV:F:L:M")) != EOF) {
         switch (op) {
           case 'v':
                 if(optarg && *optarg == 'v') {
@@ -412,6 +414,11 @@ int vectormatch_proc::cmd_options(
                 }
                 break;
             }
+            case 'P':{  /* label tuple data members that match */
+                pass_all = true;
+                break;
+            }
+
             case 'B':{  /* label tuple data members that match */
                 if (!add_element(type_table, optarg,0,nullptr, 1.)) {
                     tool_print("problem adding expression %s\n", optarg);
@@ -776,13 +783,14 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
                     }
                 }
             }
-            if (qd.nmatches && matched_label) /* this is the -L option label */
-                tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
-
-            if (qd.matches && vector_name)
-                add_vector(qd.input_data);
 
             if(qd.is_last) {
+                if (got_match && matched_label) /* this is the -L option label */
+                    tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
+
+                if (got_match && vector_name)
+                    add_vector(qd.input_data);
+
                 if(dout && (got_match || pass_all)) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
@@ -904,14 +912,16 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                     }
                 }
             }
-            if (qd.nmatches && matched_label) /* this is the -L option label */
-                tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
 
-            if (qd.matches && vector_name)
-                add_vector(qd.input_data);
 
             if(qd.is_last ){
+                if (got_match && matched_label) /* this is the -L option label */
+                    tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
+
                 if(got_match || pass_all) {
+                    if (qd.matches && vector_name)
+                        add_vector(qd.input_data);
+
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
@@ -1047,14 +1057,16 @@ int vectormatch_proc::process_allstr(
                     }
                 }
             }
-            if (qd.nmatches && matched_label) /* this is the -L option label */
-                tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
 
-            if (qd.matches && vector_name)
-                add_vector(qd.input_data);
 
             if(qd.is_last){
+                if (got_match && matched_label) /* this is the -L option label */
+                    tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
+
                 if(got_match || pass_all) {
+                    if (vector_name)
+                        add_vector(qd.input_data);
+
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }

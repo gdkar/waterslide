@@ -4,16 +4,20 @@ import time, sys,os, subprocess as sb
 
 if 'TARGET' in os.environ:
     target = os.environ['TARGET']
-
+else:
+    target = ' -r ../npu2_bench/packets.cut.wsproto  -r ../npu2_bench/packets.cut_pt001.wsproto  '
+target = target.strip()
+if not target.startswith('-r '):
+    target = ' -r ' + target
 method = sys.argv[1]
 
-target = ' -r ../npu2_bench/packets.cut.wsproto  -r ../npu2_bench/packets.cut_pt001.wsproto  '
 
-if method == 're2':
-    turbo = 1
-else:
-    turbo = 6
+#if method == 're2':
+#    turbo = 1
+#else:
+#    turbo = 6
 
+turbo = 1
 target = target * turbo
 
 #targets = ['../npu2_bench/packets.cut.wsproto'] + [ '../npu2_bench/packets.cut_pt{:03}.wsproto'.format(x) for x in range(1,turbo)]
@@ -22,7 +26,7 @@ target = target * turbo
 #target_turbo = '../npu2_bench/packets.cut_pt00{{1..{turbo}}}.wsproto'.format(turbo=turbo)
 def run_npu():
     start = time.time()
-    retval = sb.call(['./waterslide','wsproto_in {target} | npu CONTENT -F ../npu2_bench/ -H 585 -L RESULT'.format(target=target)])
+    retval = sb.call(['./waterslide','wsproto_in {target} | vectormatchnpu CONTENT -v4 -F ../npu2_bench_set.npup -L RESULT -M '.format(target=target)])
     end = time.time()
     print('r:{}'.format((end-start)/turbo))
 

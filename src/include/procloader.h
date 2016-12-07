@@ -28,22 +28,18 @@ SOFTWARE.
 #include "wstypes.h"
 #include "cppwrap.h"
 
-#ifdef __cplusplus
 CPP_OPEN
-#endif // __cplusplus
 
 //read in command line options
-int proc_init(wskid_t *kid, int, char **, void **, ws_sourcev_t *, void *);
+WS_EXTERN int proc_init(wskid_t *kid, int, char **, void **, ws_sourcev_t *, void *);
 
 //set input function.. assign output types
-proc_process_t proc_input_set(void *, wsdatatype_t *, wslabel_t *,
+WS_EXTERN proc_process_t proc_input_set(void *, wsdatatype_t *, wslabel_t *,
                               ws_outlist_t *, int, void *);
 
 // graceful exit
-int proc_destroy(void *);
+WS_EXTERN int proc_destroy(void *);
 
-#ifdef __cplusplus
 CPP_CLOSE
-#endif // __cplusplus
 
 #endif // _PROCLOADER_H
