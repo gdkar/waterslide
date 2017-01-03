@@ -1,14 +1,36 @@
+/*
+No copyright is claimed in the United States under Title 17, U.S. Code.
+All Other Rights Reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+
 /*-----------------------------------------------------------------------------
  * file:        proc_vectormatchnpu.c
- *          most portions taken from proc_vectormatchre2.c
- * date:        3-2-2011
+ *              most portions inspired by proc_vectormatchre2.cc
+ * date:        1-03-2017
  * description: <see proc_purpose[] below>
  *
  *-----------------------------------------------------------------------------
  * History
  *
- * 3-02-2010        Creation.
- * 5-15-2013        Updated documentation
  *---------------------------------------------------------------------------*/
 
 #define PROC_NAME "vectormatchnpu"
@@ -26,9 +48,9 @@
 #include <cstring>
 #include <unistd.h>
 #include <cctype>
-#include <cmath>     //sqrt
-#include <numeric>   //sqrt
-#include <algorithm>   //sqrt
+#include <cmath>
+#include <numeric>
+#include <algorithm>
 #include <memory>
 #include <deque>
 #include <vector>
@@ -37,9 +59,9 @@
 #include <map>
 #include <string>
 #include <unordered_map>
-#include <utility>   //sqrt
-#include <functional>   //sqrt
-#include <cerrno>  //errno
+#include <utility>
+#include <functional>
+#include <cerrno>
 #include <funny-car/funny-car-c.h>
 #include "waterslide.h"
 #include "datatypes/wsdt_fixedstring.h"
@@ -56,7 +78,6 @@
  *                  D E F I N E S
  *---------------------------------------------------------------------------*/
 #define LOCAL_MAX_TYPES 25
-#define LOCAL_VECTOR_SIZE 2000
 
 using namespace funny_car;
 /*-----------------------------------------------------------------------------
