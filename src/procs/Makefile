@@ -100,7 +100,7 @@ proc_re2$(WS_SFX): proc_re2.cc
 endif
 
 ifdef HASNPU2
-NPU2FLAGS += $(filter-out -std=gnu11,$(shell pkg-config --cflags funnycar))
+NPU2FLAGS += $(filter-out -std=gnu11,$(shell pkg-config --cflags funnycar)) -std=gnu++11
 NPU2LIB   += $(shell pkg-config --static --libs funnycar)
 proc_vectormatchnpu$(WS_SFX): proc_vectormatchnpu.cc
 	$(SHOWFILE)
@@ -116,7 +116,7 @@ PCAPFLAGS =
 PCAPLIB = -lpcap
 proc_pcap_in$(WS_SFX): proc_pcap_in.cc
 	$(SHOWFILE)
-	$(CPP) $(CPPFLAGS) $< -o $@ $(PCAPLIB) $(LDFLAGS) -lpcap
+	$(CPP) -std=gnu++11 $(CPPFLAGS) $< -o $@ $(PCAPLIB) $(LDFLAGS) -lpcap
 	$(INSTALL) $@ $(WS_PROCS_DIR)
 else
 proc_pcap_in$(WS_SFX): proc_pcap_in.cc
