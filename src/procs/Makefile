@@ -99,6 +99,30 @@ proc_re2$(WS_SFX): proc_re2.cc
 	@echo " not building $@, unset NORE2 to build"
 endif
 
+ifdef HASNPU2
+NPU2FLAGS += $(filter-out -std=gnu11,$(shell pkg-config --cflags funnycar))
+NPU2LIB   += $(shell pkg-config --static --libs funnycar)
+proc_vectormatchnpu$(WS_SFX): proc_vectormatchnpu.cc
+	$(SHOWFILE)
+	$(CPP) $(CPPFLAGS) $< -o $@  $(NPU2FLAGS) $(NPU2LIB) $(LDFLAGS) -rdynamic -lfunnycar
+	$(INSTALL) $@ $(WS_PROCS_DIR)
+else
+proc_vectormatchnpu$(WS_SFX): proc_vectormatchnpu.cc
+	@echo " not building $@, set HASNPU2=1 to build"
+endif
+
+ifdef HASPCAP
+PCAPFLAGS =
+PCAPLIB = -lpcap
+proc_pcap_in$(WS_SFX): proc_pcap_in.cc
+	$(SHOWFILE)
+	$(CPP) $(CPPFLAGS) $< -o $@ $(PCAPLIB) $(LDFLAGS) -lpcap
+	$(INSTALL) $@ $(WS_PROCS_DIR)
+else
+proc_pcap_in$(WS_SFX): proc_pcap_in.cc
+	@echo " not building $@, set HASPCAP=1 to build"
+endif
+
 ifdef HASDPU
 DPUFLAGS += `pkg-config --cflags funnycar`
 DPULIB   += `pkg-config --libs funnycar`
