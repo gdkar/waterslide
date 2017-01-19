@@ -375,7 +375,7 @@ vectormatch_proc::~vectormatch_proc()
             got_match = false;
         }
     }
-    npu_driver_close(&driver);
+    npu_driver_free(&driver);
     tool_print("meta_proc cnt %" PRIu64, meta_process_cnt);
     tool_print("matched tuples cnt %" PRIu64, hits);
     tool_print("output cnt %" PRIu64, outcnt);
@@ -390,7 +390,26 @@ const proc_labeloffset_t proc_labeloffset[] = {
 //    {"VECTOR",offsetof(proc_instance_t,vector_name)},
     {"PATTERN_ID",offsetof(vectormatch_proc, pattern_id_label)}
 };
+namespace {
+int vectormatch_log_callback(void *opaque, NPULogLevel level, const char *fmt, va_list args)
+{
+    auto self = static_cast<vectormatch_proc*>(opaque);
+    void(sizeof(self));
+    char msg[4096] = { 0, };
+    vsnprintf(msg, sizeof(msg), fmt, args);
+    if(int(level) >= NPU_ERROR) {
+        error_print("%s", msg);
+    }else if(int(level) >= NPU_VERBOSE) {
+        tool_print("%s",msg);
+    }else if(int(level) >= NPU_SPEW) {
+        dprint("%s",msg);
+    }else{
+        error_print("at unknown log level %d, %s",int(level),msg);
+    }
+    return 0;
+}
 
+}
 /*-----------------------------------------------------------------------------
  * proc_cmd_options
  *  parse out and process the command line options of the kid.
@@ -514,6 +533,7 @@ int vectormatch_proc::cmd_options(
     driver = npu_driver_alloc();
     if(!driver)
         return 0;
+    npu_log_set_handler(driver, (void*)this, &vectormatch_log_callback);
     npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
     if(npu_driver_open(&driver,device_name.c_str()) < 0) {
           error_print("failed to open NPU hardware device");
