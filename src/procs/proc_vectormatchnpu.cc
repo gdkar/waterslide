@@ -304,7 +304,7 @@ vectormatch_proc::~vectormatch_proc()
     npu_client_flush(client);
     npu_client_free(&client);
     npu_thread_stop(driver);
-    npu_driver_close(&driver);
+    npu_driver_free(&driver);
     while(!cb_queue.empty()) {
         if(cb_queue.front()->empty())
             cb_queue.pop_front();
@@ -362,6 +362,20 @@ vectormatch_proc::~vectormatch_proc()
 
 }
 
+static int vectormatch_npu_log_cb(void *, int level, const char *fmt, va_list args)
+{
+    auto ilevel = int(level);
+    char msg[4096] = { 0, };
+    vsnprintf(msg,sizeof(msg),fmt, args);
+    if(ilevel >= int(NPU_ERROR)) {
+        error_print("%s",msg);
+    }else if(ilevel >= int(NPU_VERBOSE)) {
+        tool_print("%s",msg);
+    }else{
+        dprint("%s",msg);
+    }
+    return 0;
+}
 const proc_labeloffset_t proc_labeloffset[] = {
 //    {"MATCH",offsetof(proc_instance_t, umatched_label)},
 //    {"VECTOR",offsetof(proc_instance_t,vector_name)},
@@ -496,7 +510,8 @@ int vectormatch_proc::cmd_options(
     driver = npu_driver_alloc();
     if(!driver)
         return 0;
-    npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
+    npu_log_set_level(driver,NPULogLevel((int)NPU_INFO - verbosity));
+    npu_log_set_handler(driver,(void*)this, &vectormatch_npu_log_cb);
     if(npu_driver_open(&driver,device_name.c_str()) < 0) {
           error_print("failed to open NPU hardware device");
           return 0;
