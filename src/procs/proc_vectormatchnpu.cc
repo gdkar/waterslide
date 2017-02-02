@@ -391,7 +391,7 @@ const proc_labeloffset_t proc_labeloffset[] = {
     {"PATTERN_ID",offsetof(vectormatch_proc, pattern_id_label)}
 };
 namespace {
-int vectormatch_log_callback(void *opaque, NPULogLevel level, const char *fmt, va_list args)
+int vectormatch_log_callback(void *opaque, int level, const char *fmt, va_list args)
 {
     auto self = static_cast<vectormatch_proc*>(opaque);
     void(sizeof(self));
