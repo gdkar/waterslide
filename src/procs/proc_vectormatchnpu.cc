@@ -120,7 +120,7 @@ extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL
 extern "C" const char *const proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
 extern "C" const char proc_purpose[]     = "matches a list of regular expressions and returns a vector";
 extern "C" const char *const proc_synopsis[] = {
-    "vectormatchnpu [-V <label>] -F <file> [-L <label>] [-W] <label of string member to match>"
+    "vectormatchnpu [-V <label>] -F <file> [-L <label>] <label of string member to match>"
   , nullptr
     };
 extern "C" const char proc_description[] =
@@ -169,8 +169,6 @@ extern "C" const proc_option_t proc_opts[] = {
     "affix keyword label to matching tuple member",0,0},
     {'L',"","",
     "common label to affix to matched tuple member",0,0},
-    {'W',"","",
-    "use weighted counts",0,0},
     {'D',"","device",
     "device file to use.",0,0},
     {'E',"","expression",
@@ -428,7 +426,7 @@ int vectormatch_proc::cmd_options(
 //    matched_label = wsregister_label(type_table, "RESULT");
     vector_name   = wsregister_label(type_table, "VECTOR");
 
-    while ((op = getopt(argc, argv, "m:B:E:D:v::WV:F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "m:B:E:D:v::V:F:L:M")) != EOF) {
         switch (op) {
           case 'v':
                 if(optarg && *optarg == 'v') {
@@ -495,11 +493,6 @@ int vectormatch_proc::cmd_options(
                 tool_print("setting vector label to %s", temp);
                 break;
             }
-            case 'W': {
-                weighted_counts = true;
-                break;
-            }
-
             /* These are present in proc_match.  We may want to include them here
             * at some point */
 
