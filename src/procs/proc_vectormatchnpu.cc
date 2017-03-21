@@ -229,11 +229,38 @@ struct vector_element
     std::string pattern;
     wslabel_t *label{};      /* the label associated with the vector element */
     size_t matchlen{};
+    int    pid{-1};
     double count{};    /* freq. of occurrence of the element */
     double weight{1.};         /* the weight (contained in the input file */
 };
+template<class It>
+struct iter_range : std::tuple<It,It> {
+    using traits_type = typename std::iterator_traits<It>;
+    using iterator    = It;
+    using super       = std::tuple<iterator,iterator>;
+    using super::super;
+/*    std::tuple<It,It> m_d{};
+    usi
+    iter_range() = default;
+    iter_range(iter_range&&) noexcept = default;
+    iter_range(const iter_range&) = default;
+    iter_range&operator=(iter_range &&) noexcept = default;
+    iter_range&operator=(const iter_range &) = default;
+    iter_range(std::tuple<It,It> && args):m_d{args}{}
+    template<class... Args>
+    iter_range(Args && ...args)
+    : m_d(std::forward<Args>(args)...)
+    {}*/
 
+    iterator begin() const { return std::get<0>(*this);}
+    iterator end()   const { return std::get<1>(*this);}
+};
 
+template<class Tup, class It = typename std::tuple_element<0,Tup>::type>
+iter_range<It> make_iter_range( Tup && tup)
+{
+    return { std::forward<Tup >(tup) };
+}
 /*-----------------------------------------------------------------------------
  *              P R O C _ I N S T A N C E
  *---------------------------------------------------------------------------*/
@@ -252,7 +279,8 @@ struct vectormatch_proc {
 
     int do_tag[LOCAL_MAX_TYPES];
 
-    std::vector<vector_element> term_vector;
+    std::vector<vector_element> term_vector{};
+    std::multimap<int, vector_element&> term_map{};
 
     std::deque<
         std::unique_ptr<
@@ -304,7 +332,7 @@ vectormatch_proc::~vectormatch_proc()
     npu_client_flush(client);
     npu_client_free(&client);
     npu_thread_stop(driver);
-    npu_driver_free(&driver);
+    npu_driver_close(&driver);
     while(!cb_queue.empty()) {
         if(cb_queue.front()->empty())
             cb_queue.pop_front();
@@ -312,7 +340,7 @@ vectormatch_proc::~vectormatch_proc()
             auto &qd = cb_queue.front()->front();
             if(!qd.is_done.load())
                 continue;
-            if(qd.matches) {
+            if(qd.nmatches && !got_match) {
                 hits++;
                 got_match = true;
             }
@@ -324,25 +352,30 @@ vectormatch_proc::~vectormatch_proc()
             max_status = std::max<int>(max_status,qd.nmatches);
             for(auto i = 0; i < qd.nmatches; ++i) {
                 auto mval = qd.matches[i];
-                term_vector[mval].count++;
-                //i.e., is there a tuple member we are going to add to?
-                if (qd.member_data && label_members) {
-                    /*get the label associated with the number returned by Aho-Corasick;
-                    * default to label_match if one is not found. */
-                    auto mlabel = term_vector[mval].label;
-                    if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
-                        /* this allows labels to be indexed */
-                        tuple_add_member_label(qd.input_data, /* the tuple itself */
-                                qd.member_data,    /* the tuple member to be added to */
-                                mlabel /* the label to be added */);
-                        tuple_member_create_int(qd.input_data, mval, pattern_id_label);
+                auto eq_range = make_iter_range(term_map.equal_range(mval));
+                for(auto & term : eq_range) {
+//                if(mval >= 0 && mval <  term_vector.size()) {
+//                    auto &term = term_vector[mval];
+//                    term.second.count++;
+                    //i.e., is there a tuple member we are going to add to?
+                    if (qd.member_data && label_members) {
+                        /*get the label associated with the number returned by Aho-Corasick;
+                        * default to label_match if one is not found. */
+                        auto mlabel = term.second.label;
+                        if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
+                            /* this allows labels to be indexed */
+                            tuple_add_member_label(qd.input_data, /* the tuple itself */
+                                    qd.member_data,    /* the tuple member to be added to */
+                                    mlabel /* the label to be added */);
+                            tuple_member_create_int(qd.input_data, term.second.pid, pattern_id_label);
+                        }
                     }
                 }
             }
             if (qd.nmatches && matched_label) /* this is the -L option label */
                 tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
 
-            if (qd.matches && vector_name)
+            if (qd.nmatches && vector_name)
                 add_vector(qd.input_data);
 
             if(qd.is_last) {
@@ -510,16 +543,16 @@ int vectormatch_proc::cmd_options(
     driver = npu_driver_alloc();
     if(!driver)
         return 0;
-    npu_log_set_level(driver,NPULogLevel((int)NPU_INFO - verbosity));
+    npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
     npu_log_set_handler(driver,(void*)this, &vectormatch_npu_log_cb);
     if(npu_driver_open(&driver,device_name.c_str()) < 0) {
           error_print("failed to open NPU hardware device");
           return 0;
      }
     
-    auto temp_vector = term_vector;
-    term_vector.clear();
-    for(auto & term : temp_vector) {
+//    auto temp_vector = term_vector;
+//    term_vector.clear();
+    for(auto & term : term_vector) {
         if(term.matchlen) {
             auto pattern_id = npu_pattern_insert_pcre(
                 driver
@@ -531,9 +564,10 @@ int vectormatch_proc::cmd_options(
                 error_print("failed to open to insert pattern %s", term.pattern.c_str());
                 continue;
             }
-            if((size_t)pattern_id >= term_vector.size())
-                term_vector.resize(pattern_id+1);
-            term_vector[pattern_id] = term;
+            term_map.emplace(pattern_id, std::ref(term));
+//            if((size_t)pattern_id >= term_vector.size())
+//                term_vector.resize(pattern_id+1);
+//            term_vector[pattern_id] = term;
             tool_print("Loaded string '%s' label '%s' weight '%g' -> %d",
                 term.pattern.c_str(), term.label->name, term.weight,pattern_id);
         }else{
@@ -545,9 +579,10 @@ int vectormatch_proc::cmd_options(
                 error_print("failed to open to insert pattern %s", term.pattern.c_str());
                 continue;
             }
-            if((size_t)pattern_id >= term_vector.size())
+            term_map.emplace(pattern_id, std::ref(term));
+/*            if((size_t)pattern_id >= term_vector.size())
                 term_vector.resize(pattern_id+1);
-            std::swap(term_vector[pattern_id], term);
+            std::swap(term_vector[pattern_id], term);*/
             tool_print("Loaded string '%s' label '%s' weight '%g' -> %d",
                 term.pattern.c_str(), term.label->name, term.weight,pattern_id);
 
@@ -765,7 +800,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
             auto &qd = cb_queue.front()->front();
             if(!qd.is_done.load())
                 continue;
-            if(qd.matches) {
+            if(qd.nmatches && !got_match) {
                 hits++;
                 got_match = true;
             }
@@ -776,12 +811,15 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
             max_status = std::max<int>(max_status,qd.nmatches);
             for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
-                term_vector[mval].count+= 1;
+                auto eq_range = make_iter_range(term_map.equal_range(mval));
+                for(auto & term : eq_range) {
+                    term.second.count+=1;
+//                term_vector[mval].count+= 1;
                 //i.e., is there a tuple member we are going to add to?
                 if (qd.member_data && label_members) {
                     /*get the label associated with the number returned by Aho-Corasick;
                     * default to label_match if one is not found. */
-                    auto mlabel = term_vector[mval].label;
+                        auto mlabel = term.second.label;
                     if(mlabel) {
                         if (!wsdata_check_label(qd.member_data, mlabel)) {
                             /* this allows labels to be indexed */
@@ -789,14 +827,16 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
                                     qd.member_data,    /* the tuple member to be added to */
                                     mlabel /* the label to be added */);
                             if(matched_label)
-                                tuple_add_member_label(qd.input_data, /* the tuple itself */
-                                        qd.member_data,    /* the tuple member to be added to */
+                                tuple_add_member_label(
+                                    qd.input_data, /* the tuple itself */
+                                    qd.member_data,    /* the tuple member to be added to */
                                     matched_label/* the label to be added */);
 
-                            tuple_member_create_int(qd.input_data, mval, pattern_id_label);
+                            tuple_member_create_int(qd.input_data, term.second.pid, pattern_id_label);
                         }
                     }
                 }
+            }
             }
 
             if(qd.is_last) {
@@ -806,7 +846,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
                 if (got_match && vector_name)
                     add_vector(qd.input_data);
 
-                if(dout && (got_match || pass_all)) {
+                if(dout && (got_match || pass_all || do_tag[type_index])) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
@@ -889,7 +929,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
             }
         }
     }
-    if(pass_all && !submitted) {
+    if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++outcnt;
     }
@@ -901,7 +941,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
             if(!qd.is_done.load())
                 break;
             found += qd.nmatches;
-            if(qd.matches) {
+            if(qd.nmatches && !got_match) {
                 hits++;
                 got_match = true;
             }
@@ -912,29 +952,33 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                 qd_overflow++;
             for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
-                term_vector[mval].count++;
+                auto eq_range = make_iter_range(term_map.equal_range(mval));
+                for(auto & term : eq_range) {
+                    term.second.count++;
+
+//                term_vector[mval].count++;
                 //i.e., is there a tuple member we are going to add to?
                 if (qd.member_data && label_members) {
                     /*get the label associated with the number returned by Aho-Corasick;
                     * default to label_match if one is not found. */
-                    auto mlabel = term_vector[mval].label;
+                    auto mlabel = term.second.label;
                     if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
                         /* this allows labels to be indexed */
                         tuple_add_member_label(qd.input_data, /* the tuple itself */
                                 qd.member_data,    /* the tuple member to be added to */
                                 mlabel /* the label to be added */);
-                        tuple_member_create_int(qd.input_data, mval, pattern_id_label);
+                        tuple_member_create_int(qd.input_data, term .second.pid, pattern_id_label);
                     }
                 }
             }
-
+            }
 
             if(qd.is_last ){
                 if (got_match && matched_label) /* this is the -L option label */
                     tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
 
-                if(got_match || pass_all) {
-                    if (qd.matches && vector_name)
+                if(got_match || pass_all || do_tag[type_index]) {
+                    if (got_match && qd.nmatches && vector_name)
                         add_vector(qd.input_data);
 
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
@@ -1034,7 +1078,7 @@ int vectormatch_proc::process_allstr(
             npu_client_end_packet(client);
         }
     }
-    if(pass_all && !submitted) {
+    if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++outcnt;
     }
@@ -1051,35 +1095,37 @@ int vectormatch_proc::process_allstr(
                 hw_overflow++;
             if(qd.qd_overflow)
                 qd_overflow++;
-            if(qd.nmatches) {
+            if(qd.nmatches && !got_match) {
                 hits++;
                 got_match = true;
             }
             for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
-                term_vector[mval].count++;
+                auto eq_range = make_iter_range(term_map.equal_range(mval));
+                for(auto & term : eq_range) {
+                    term.second.count++;
                 //i.e., is there a tuple member we are going to add to?
                 if (qd.member_data && label_members) {
                     /*get the label associated with the number returned by Aho-Corasick;
                     * default to label_match if one is not found. */
-                    auto mlabel = term_vector[mval].label;
+                    auto mlabel = term.second.label;
                     if (!wsdata_check_label(qd.member_data, mlabel)) {
                         /* this allows labels to be indexed */
                         tuple_add_member_label(qd.input_data, /* the tuple itself */
                                 qd.member_data,    /* the tuple member to be added to */
                                 mlabel /* the label to be added */);
-                        tuple_member_create_int(qd.input_data, mval, pattern_id_label);
+                        tuple_member_create_int(qd.input_data, term.second.pid, pattern_id_label);
                     }
                 }
             }
+            }
 
-
-            if(qd.is_last){
+            if(qd.is_last) {
                 if (got_match && matched_label) /* this is the -L option label */
                     tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
 
-                if(got_match || pass_all) {
-                    if (vector_name)
+                if(got_match || pass_all || do_tag[type_index]) {
+                    if (vector_name && got_match )
                         add_vector(qd.input_data);
 
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
@@ -1139,6 +1185,7 @@ int vectormatch_proc::add_element(void * type_table,
     term_vector.emplace_back();
     term_vector.back().pattern = std::string { restr ? restr : ""};
     term_vector.back().matchlen = matchlen;
+    term_vector.back().pid = term_vector.size();
     term_vector.back().label = newlab;
     term_vector.back().weight = weight;
 

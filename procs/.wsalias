@@ -106,8 +106,8 @@ mklabelset: mklabelset
 mklabelset: mklabelset
 mknest: renest
 mknest: renest
-npu: tdpu, tpu, dpu
-npu: tdpu, tpu, dpu
+pcap_in: pcap, pcap_in, pcap_filein
+pcap_in: pcap, pcap_in, pcap_filein
 print: pmeta, p
 print: pmeta, p
 print2json: pmetajson, pjson
@@ -164,6 +164,8 @@ uniqexpire: expireuniq
 uniqexpire: expireuniq
 untiln: until
 untiln: until
+vectormatchnpu: vectornpu, vnpu, npu2
+vectormatchnpu: vectornpu, vnpu, npu2
 vectormatchre2: vectorre2
 vectormatchre2: vectorre2
 workbalance: wbalance
