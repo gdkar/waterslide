@@ -412,12 +412,11 @@ static inline int find_match(proc_instance_t * proc,   /* our instance */
                                    wsd,   /* the tuple member to be added to */
                                    mlabel /* the label to be added */);
             }
-         }
-
-         if (proc->matched_label) /* this is the -L option label */
-         {
-            tuple_add_member_label(tdata, wsd, proc->matched_label);
-            tuple_add_member_label(tdata, tdata, proc->matched_label);
+            if (proc->matched_label) /* this is the -L option label */
+            {
+                tuple_add_member_label(tdata, wsd, proc->matched_label);
+    //            tuple_add_member_label(tdata, tdata, proc->matched_label);
+            }
          }
          matches++;
       }   
@@ -490,8 +489,8 @@ static int proc_process_meta(void * vinstance,       /* the instance */
     * above.  Then there would be a distinct vector for each matched
     * field */
    if (found || proc->do_tag[type_index]) {
-      if (proc->matched_label && found) {
-         wsdata_add_label(input_data, proc->matched_label);
+      if (found && proc->matched_label && !wsdata_check_label(input_data, proc->matched_label)) {
+        wsdata_add_label(input_data, proc->matched_label);
       }
       
       /* now that the vector has been read, reset the counts */
@@ -534,8 +533,8 @@ static int proc_process_allstr(void * vinstance,     /* the instance */
       found += member_match(proc, member, member, input_data);
 
       if (found || proc->do_tag[type_index]){
-         if (proc->matched_label && found){
-            wsdata_add_label(input_data, proc->matched_label);
+            if (found && proc->matched_label && !wsdata_check_label(input_data, proc->matched_label)) {
+                wsdata_add_label(input_data, proc->matched_label);
          }
          /* now that the vector has been read, reset the counts */
          ws_set_outdata(input_data, proc->outtype_tuple, dout);
