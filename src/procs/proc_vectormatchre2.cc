@@ -406,7 +406,7 @@ static inline int find_match(proc_instance_t * proc,   /* our instance */
             /*get the label associated with the number returned by Aho-Corasick;
              * default to label_match if one is not found. */
             wslabel_t * mlabel = proc->term_vector[mval].label;
-            if (!wsdata_check_label(wsd, mlabel)) {
+            if (mlabel && !wsdata_check_label(wsd, mlabel)) {
                /* this allows labels to be indexed */
                tuple_add_member_label(tdata, /* the tuple itself */
                                    wsd,   /* the tuple member to be added to */
@@ -417,6 +417,7 @@ static inline int find_match(proc_instance_t * proc,   /* our instance */
          if (proc->matched_label) /* this is the -L option label */
          {
             tuple_add_member_label(tdata, wsd, proc->matched_label);
+            tuple_add_member_label(tdata, tdata, proc->matched_label);
          }
          matches++;
       }   

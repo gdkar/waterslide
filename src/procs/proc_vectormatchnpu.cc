@@ -211,6 +211,7 @@ struct callback_batch {
 struct vector_element
 {
     std::string pattern;
+    std::string binfile;
     wslabel_t *label{};      /* the label associated with the vector element */
     size_t matchlen{};
     int    pid{-1};
@@ -273,8 +274,8 @@ struct vectormatch_proc {
     bool                              got_match{false};
     npu_driver                       *driver{};
     npu_client                       *client{};
-    int verbosity{};
-    int status_size{1};
+    int  verbosity{};
+    int  status_size{1};
     bool label_members{}; /* 1 if we should labels matched members*/
     bool pass_all{false}; /* 1 if we should labels matched members*/
     bool thread_running{};
@@ -289,8 +290,9 @@ struct vectormatch_proc {
      , void *type_table
        );
     int add_element(void * type_table,
-                char *restr, unsigned int matchlen,
-                char *labelstr);
+                const char *restr, const char *binstr, size_t matchlen,
+                const char *labelstr);
+
     static int proc_process_meta(void *, wsdata_t*, ws_doutput_t*, int);
     static int proc_process_allstr(void *, wsdata_t*, ws_doutput_t*, int);
     static int proc_process_flush(void *, wsdata_t*, ws_doutput_t*, int);
@@ -436,7 +438,7 @@ int vectormatch_proc::cmd_options(
                 break;
             }
             case 'E':{  /* label tuple data members that match */
-                if (!add_element(type_table, optarg, strlen(optarg)+1,nullptr)) {
+                if (!add_element(type_table, optarg, nullptr, strlen(optarg)+1,nullptr)) {
                     tool_print("problem adding expression %s\n", optarg);
                 }
                 break;
@@ -447,7 +449,7 @@ int vectormatch_proc::cmd_options(
             }
 
             case 'B':{  /* label tuple data members that match */
-                if (!add_element(type_table, optarg,0,nullptr)) {
+                if (!add_element(type_table, optarg, nullptr, strlen(optarg)+1,nullptr)) {
                     tool_print("problem adding expression %s\n", optarg);
                 }
                 break;
@@ -513,7 +515,19 @@ int vectormatch_proc::cmd_options(
     npu_log_set_level(driver,(NPULogLevel)((int)NPU_WARN));
     
     for(auto & term : term_vector) {
-        if(term.matchlen) {
+        if(!term.binfile.empty()) {
+            auto pattern_id = npu_pattern_insert_binary_file(
+                driver
+              , term.binfile.c_str()
+                );
+            if(pattern_id < 0) {
+                error_print("failed to open to insert pattern '%s', file '%s'", term.pattern.c_str(), term.binfile.c_str());
+                continue;
+            }
+            term_map.emplace(pattern_id, std::ref(term));
+            tool_print("Loaded file '%s' with string '%s' label '%s' -> %d",
+                term.binfile.c_str(), term.pattern.c_str(), term.label->name, pattern_id);
+        }else if(term.matchlen) {
             auto pattern_id = npu_pattern_insert_pcre(
                 driver
               , term.pattern.c_str()
@@ -521,7 +535,7 @@ int vectormatch_proc::cmd_options(
               , ""
                 );
             if(pattern_id < 0) {
-                error_print("failed to open to insert pattern %s", term.pattern.c_str());
+                error_print("failed to open to insert pattern '%s'", term.pattern.c_str());
                 continue;
             }
             term_map.emplace(pattern_id, std::ref(term));
@@ -539,8 +553,6 @@ int vectormatch_proc::cmd_options(
             term_map.emplace(pattern_id, std::ref(term));
             tool_print("Loaded string '%s' label '%s' -> %d",
                 term.pattern.c_str(), term.label->name, pattern_id);
-
-
         }
     }
      npu_pattern_load(driver);
@@ -1100,8 +1112,8 @@ int proc_destroy(void * vinstance)
  * [out] rval       - 1 if okay, 0 if error.
  *---------------------------------------------------------------------------*/
 int vectormatch_proc::add_element(void * type_table,
-                char *restr, unsigned int matchlen,
-                char *labelstr)
+                const char *restr, const char *binstr, size_t matchlen,
+                const char *labelstr)
 {
     /* push everything into a vector element */
     auto newlab = labelstr ? wsregister_label(type_table, labelstr)
@@ -1110,6 +1122,7 @@ int vectormatch_proc::add_element(void * type_table,
 //    auto match_id = term_vector.size();
     term_vector.emplace_back();
     term_vector.back().pattern = std::string { restr ? restr : ""};
+    term_vector.back().binfile = std::string { binstr ? binstr : ""};
     term_vector.back().matchlen = matchlen;
     term_vector.back().pid = term_vector.size();
     term_vector.back().label = newlab;
@@ -1146,8 +1159,27 @@ static int process_hex_string(char * matchstr, int matchlen) {
 
     return soffset;
 }
-
-
+namespace {
+const char* find_escaped (const char *ptr,const char *pend, char val)
+{
+    auto esc = false;
+    if(!ptr)
+        return nullptr;
+    for(;(pend ? (ptr != pend) : *ptr); ++ptr) {
+        auto c = *ptr;
+        if(esc) {
+            esc = false;
+        }else{
+            if(c == '\\') {
+                esc = true;
+            }else if(c == val) {
+                return ptr;
+            }
+        }
+    }
+    return pend;
+};
+}
 /*-----------------------------------------------------------------------------
  * vectormatch_loadfile
  *  read input match strings from input file.  This function is taken
@@ -1158,11 +1190,14 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
     FILE * fp;
     char line [2001];
     int linelen;
-    char * linep;
-    char * matchstr;
-    int matchlen;
-    char * endofstring;
-    char * match_label;
+    char * linep = nullptr;
+    char * datap = nullptr;
+    char * matchstr = nullptr;
+    int    matchlen;
+    char * binstr = nullptr;
+    int    binlen;
+    char * endofstring = nullptr;
+    char * match_label = nullptr;
 
     if ((fp = sysutil_config_fopen(thefile,"r")) == NULL) {
         fprintf(stderr,
@@ -1181,30 +1216,30 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
 
         if ((linelen <= 0) || (line[0] == '#'))
             continue;
-
+        datap = line + linelen;
         linep = line;
         matchstr = NULL;
         match_label = NULL;
         // read line - exact seq
         if (linep[0] == '"') {
-            linep++;
-            endofstring = (char *)rindex(linep, '"');
+            endofstring = (char*)find_escaped(linep + 1,nullptr,'"');
+//            linep++;
+//            endofstring = (char *)rindex(linep, '"');
             if (endofstring == NULL)
             continue;
 
             endofstring[0] = '\0';
-            matchstr = linep;
+            matchstr = linep + 1;
             matchlen = strlen(matchstr);
             //sysutil_decode_hex_escapes(matchstr, &matchlen);
             linep = endofstring + 1;
         } else if (linep[0] == '{') {
             linep++;
-            endofstring = (char *)rindex(linep, '}');
+            endofstring = (char *)index(linep, '}');
             if (endofstring == NULL)
                 continue;
             endofstring[0] = '\0';
             matchstr = linep;
-
             matchlen = process_hex_string(matchstr, strlen(matchstr));
             if (!matchlen)
                 continue;
@@ -1218,7 +1253,8 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
         if (matchstr) {
             //find (PROTO)
             match_label = (char *) index(linep,'(');
-            endofstring = (char *) rindex(linep,')');
+            endofstring = (char *) index(linep,')');
+//            endofstring = match_label ? (char *) find_escaped(match_label,nullptr, ')') : nullptr;
 
             if (match_label && endofstring && (match_label < endofstring)) {
                 match_label++;
@@ -1232,12 +1268,45 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
             }
             linep = endofstring + 1;
         }
-        if (!add_element(type_table, matchstr, matchlen,match_label)) {
-            sysutil_config_fclose(fp);
-            return 0;
+        if (match_label) {
+            const char whitespace[] = " \t";
+            binstr = std::find_if(linep,datap, [](char x){return x != ' ' && x != '\t';});
+            if(binstr && binstr!= datap) {
+                if(*binstr== '"') {
+                    ++binstr;
+                    auto bin_end = (char*)find_escaped(binstr ,nullptr,'"');
+                    if(!bin_end) {
+                        binstr = nullptr;
+                    } else {
+                        *bin_end = '\0';
+                    }
+                }else if(*binstr== '\'') {
+                    ++binstr;
+                    auto bin_end = (char*)find_escaped(binstr,nullptr,'\'');
+                    if(!bin_end) {
+                        binstr = nullptr;
+                    } else {
+                        *bin_end = '\0';
+                    }
+                }
+            }
         }
-        tool_print("Adding entry for string '%s' label '%s'",
-            matchstr, match_label);
+        if(!binstr) {
+            if (!add_element(type_table, matchstr, nullptr, matchlen,match_label)) {
+                sysutil_config_fclose(fp);
+                return 0;
+            }
+            dprint("Adding entry for string '%s' label '%s'",
+                matchstr, match_label);
+        } else {
+            auto binloc = std::string{binstr};
+            if (!add_element(type_table, matchstr, binloc.c_str(), matchlen,match_label)) {
+                sysutil_config_fclose(fp);
+                return 0;
+            }
+            dprint("Adding entry for file '%s' string '%s' label '%s'",
+                binloc.c_str(), matchstr, match_label);
+        }
 
     }
     sysutil_config_fclose(fp);
