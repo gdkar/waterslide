@@ -1,0 +1,2 @@
+"(select).*(substring)"   (MATCH)
+"(select.*string)"   (MATCH)
