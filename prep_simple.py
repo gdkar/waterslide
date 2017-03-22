@@ -13,15 +13,18 @@ count = 0
 expr = re.compile('"(.*)"(\\s*\\(.*?\\))?')
 with open(sys.argv[1]) as _ifile:
     with open(ofile,'w') as _ofile:
-        for line in _ifile:
+        for expression in _ifile:
             try:
-                m = expr.match(line)
-                expression = m.group(1).replace('/','\\x2f')
+                expression = expression[:-1]
                 print(expression)
-                label = m.group(2) or " (L{})".format(count)
-                binfile = ppath.join(odir,'{}-{}'.format(count,expression))
-                sb.check_call(['dc','-e',expression,'-o',binfile])
+                label = " (L{})".format(count)
+                binfile = ppath.join(odir,'expression-{}.npup'.format(count))
+                retcode = sb.call(['dc','-e',expression,'-o',binfile])
+                if retcode < 0:
+                    continue
                 _ofile.write('"{}"\t{} "{}"\n'.format(expression,label, binfile));
                 count += 1
+                if retcode > 0:
+                    print("non fatal error {}".format(retcode))
             except Exception as e:
                 print(e)
