@@ -24,6 +24,8 @@
 #include <algorithm>   //sqrt
 #include <utility>   //sqrt
 #include <functional>   //sqrt
+#include <vector>
+#include <string>
 #include <cerrno>  //errno
 #include <re2/re2.h>
 #include "waterslide.h"
@@ -124,9 +126,11 @@ const proc_example_t proc_examples[] = {
 
 const proc_option_t proc_opts[] = {
      /*  'option character', "long option string", "option argument",
-	 "option description", <allow multiple>, <required>*/
+         "option description", <allow multiple>, <required>*/
      {'F',"","file",
      "(required) file with items to search",0,0},
+     {'O',"","options",
+     "pcre style regex flags to set by default",0,0},
      {'M',"","",
       "affix keyword label to matching tuple member",0,0},
      {'L',"","",
@@ -206,8 +210,8 @@ static int proc_process_meta(void *, wsdata_t*, ws_doutput_t*, int);
 static int proc_process_allstr(void *, wsdata_t*, ws_doutput_t*, int);
 
 static int vectormatch_loadfile(void *vinstance, 
-				void *type_table, 
-				char *thefile);
+                                void *type_table, 
+                                char *thefile, const re2::RE2::Options & opts = {});
 
 /*-----------------------------------------------------------------------------
  * proc_cmd_options
@@ -220,52 +224,74 @@ static int proc_cmd_options(int argc, char ** argv,
 {
    int op;
    int F_opt = 0;
-
-   while ((op = getopt(argc, argv, "F:L:M")) != EOF) 
-   {
-      switch (op) 
-      {
-	 case 'M':  /* label tuple data members that match */
-	    proc->intermed_labels = 1;
-	    break;
-	    
-	 case 'L':  /* labels an entire tuple and  matching members. */
-	    tool_print("Registering label '%s' for matching buffers.", optarg);
-	    proc->matched_label = wsregister_label(type_table, optarg);
-	    break;
-	    
-	 case 'F':  /* load up the keyword file */
-	    if (vectormatch_loadfile(proc, type_table, optarg)) 
-	    {
-	       tool_print("reading input file %s\n", optarg);
-	    }
-	    else 
-	    {
-	      tool_print("problem reading file %s\n", optarg);
-	      return 0;
-	    }
-
-	    F_opt++;
-	    break;
-	    
-	 default:
-	    tool_print("Unknown command option supplied");
-	    exit(-1);
+   auto cfg_list = std::vector<std::string>{};
+   auto opt_list = std::string{};
+   while ((op = getopt(argc, argv, "O:F:L:M")) != EOF)  {
+      switch (op)  {
+         case 'O': {
+                opt_list += std::string{optarg};
+                break;
+         }
+         case 'M':  /* label tuple data members that match */
+            proc->intermed_labels = 1;
+            break;
+            
+         case 'L':  /* labels an entire tuple and  matching members. */
+            tool_print("Registering label '%s' for matching buffers.", optarg);
+            proc->matched_label = wsregister_label(type_table, optarg);
+            break;
+            
+         case 'F':  /* load up the keyword file */ {
+            cfg_list.emplace_back(optarg);
+            break;
+         }
+         default:
+            tool_print("Unknown command option supplied");
+            exit(-1);
       }
    }
-
-   if (!F_opt)
-   {
+    re2::RE2::Options opts{};
+    opts.set_dot_nl(true);
+    opts.set_one_line(false);
+    opts.set_perl_classes(true);
+    opts.set_word_boundary(true);
+    opts.set_case_sensitive(true);
+    opts.set_posix_syntax(false);
+    opts.set_encoding(re2::RE2::Options::EncodingLatin1);
+    if(!opt_list.empty()) {
+        auto negate = false;
+        opts.set_never_nl(false);
+        for(auto && c : opt_list) {
+            switch(c) {
+                case '-': negate = true;continue;
+                case 'i': opts.set_case_sensitive(!negate);continue;
+                case 'A': opts.set_encoding(negate?re2::RE2::Options::EncodingUTF8:re2::RE2::Options::EncodingLatin1);continue;
+                case 'U': opts.set_encoding(!negate?re2::RE2::Options::EncodingUTF8:re2::RE2::Options::EncodingLatin1);continue;
+                case 'm': opts.set_one_line(negate);continue;
+                case 's': opts.set_dot_nl(!negate); continue;
+                default:
+                    ;
+            };
+        }
+    }
+    for( auto  fp : cfg_list) {
+        if (vectormatch_loadfile(proc, type_table, &fp[0], opts))  {
+            tool_print("reading input file %s\n", fp.data());
+            F_opt++;
+        } else  {
+            tool_print("problem reading file %s\n", fp.data());
+            return 0;
+        }
+    }
+   if (!F_opt) {
       tool_print("ERROR: -F <filename> option is required.");
       exit(-1);
    }
-
    while (optind < argc) {
       wslabel_set_add(type_table, &proc->lset, argv[optind]);
       dprint("searching for string with label %s",argv[optind]);
       optind++;
    }
-   
    return 1;
 }
 
@@ -277,10 +303,10 @@ static int proc_cmd_options(int argc, char ** argv,
  * [out] rval - 1 if ok, 0 if fail.
  *---------------------------------------------------------------------------*/
 int proc_init(wskid_t * kid, 
-	      int argc, 
-	      char ** argv, 
-	      void ** vinstance, 
-	      ws_sourcev_t * sv,
+              int argc, 
+              char ** argv, 
+              void ** vinstance, 
+              ws_sourcev_t * sv,
               void * type_table) 
 {
      //allocate proc instance of this processor
@@ -319,10 +345,10 @@ int proc_init(wskid_t * kid,
  * return 0 if problem
  *---------------------------------------------------------------------------*/
 proc_process_t proc_input_set(void * vinstance, 
-			      wsdatatype_t * input_type,
+                              wsdatatype_t * input_type,
                               wslabel_t * port,
                               ws_outlist_t* olist, 
-			      int type_index,
+                              int type_index,
                               void * type_table) 
 {
    proc_instance_t * proc = (proc_instance_t *)vinstance;
@@ -336,18 +362,15 @@ proc_process_t proc_input_set(void * vinstance,
    // TODO:  need to determine whether NPACKET is a type we want to support.
    if (wsdatatype_match(type_table, input_type, "TUPLE_TYPE")) {
       if (!proc->outtype_tuple)  {
-	 proc->outtype_tuple = ws_add_outtype(olist, dtype_tuple, NULL);  
+         proc->outtype_tuple = ws_add_outtype(olist, dtype_tuple, NULL);  
       }
   
       // Are we searching only on data associated with specific labels,
       // or anywhere in the tuple?
-      if (!proc->lset.len) 
-      {
-	 return proc_process_allstr;  // look in all strings
-      }
-      else 
-      {
-	 return proc_process_meta; // look only in the labels.
+      if (!proc->lset.len) {
+         return proc_process_allstr;  // look in all strings
+      }else {
+         return proc_process_meta; // look only in the labels.
       }
    }
    
@@ -362,13 +385,12 @@ proc_process_t proc_input_set(void * vinstance,
  * [out] rval - 1 if matches found, 0 otherwise.
  *---------------------------------------------------------------------------*/
 static inline int find_match(proc_instance_t * proc,   /* our instance */
-			     wsdata_t * wsd,           /* the tuple member */
-			     char * content,           /* buffer to match */
+                             wsdata_t * wsd,           /* the tuple member */
+                             char * content,           /* buffer to match */
                              int len,                  /* buffer length */
-			     wsdata_t * tdata)         /* the tuple */
+                             wsdata_t * tdata)         /* the tuple */
 {
-   if (len <= 0) 
-   {
+   if (len <= 0) {
       return 0;
    }
 
@@ -380,17 +402,15 @@ static inline int find_match(proc_instance_t * proc,   /* our instance */
       if(RE2::PartialMatch(str, *(proc->term_vector[mval].pattern)))   {
          proc->term_vector[mval].count++;
          //i.e., is there a tuple member we are going to add to?
-         if (wsd && proc->intermed_labels) 
-         {
-	    /*get the label associated with the number returned by Aho-Corasick;
-	     * default to label_match if one is not found. */
-	    wslabel_t * mlabel = proc->term_vector[mval].label;
-	    if (!wsdata_check_label(wsd, mlabel)) 
-	    {
-	       /* this allows labels to be indexed */
-	       tuple_add_member_label(tdata, /* the tuple itself */
-				   wsd,   /* the tuple member to be added to */
-				   mlabel /* the label to be added */);
+         if (wsd && proc->intermed_labels) {
+            /*get the label associated with the number returned by Aho-Corasick;
+             * default to label_match if one is not found. */
+            wslabel_t * mlabel = proc->term_vector[mval].label;
+            if (!wsdata_check_label(wsd, mlabel)) {
+               /* this allows labels to be indexed */
+               tuple_add_member_label(tdata, /* the tuple itself */
+                                   wsd,   /* the tuple member to be added to */
+                                   mlabel /* the label to be added */);
             }
          }
 
@@ -414,9 +434,9 @@ static inline int find_match(proc_instance_t * proc,   /* our instance */
  * [out] rval - 1 iff a match has been found.
  *---------------------------------------------------------------------------*/
 static inline int member_match(proc_instance_t *proc, /* our instance */
-			       wsdata_t *member,      /* member to be searched*/
+                               wsdata_t *member,      /* member to be searched*/
                                wsdata_t * mpd_label,  /* member to be labeled */
-			       wsdata_t * tdata)      /* the tuple */
+                               wsdata_t * tdata)      /* the tuple */
 {
    int found = 0;
    char * buf;
@@ -441,9 +461,9 @@ static inline int member_match(proc_instance_t *proc, /* our instance */
  * return 0 if not output
  *---------------------------------------------------------------------------*/
 static int proc_process_meta(void * vinstance,       /* the instance */
-			     wsdata_t* input_data,   /* incoming tuple */
+                             wsdata_t* input_data,   /* incoming tuple */
                              ws_doutput_t * dout,    /* output channel */
-			     int type_index) 
+                             int type_index) 
 {
    proc_instance_t * proc = (proc_instance_t*)vinstance;
    proc->meta_process_cnt++;
@@ -455,15 +475,12 @@ static int proc_process_meta(void * vinstance,       /* the instance */
    
    /* lset - the list of labels we will be searching over.
     * Iterate over these labels and call match on each of them */
-   for (i = 0; i < proc->lset.len; i++) 
-   {
-      if (tuple_find_label(input_data, proc->lset.labels[i], &mset_len, &mset)) 
-      {
-	 /* mset - the set of members that match the specified label*/
-	 for (j = 0; j < mset_len; j++ ) 
-	 {
+   for (i = 0; i < proc->lset.len; i++) {
+      if (tuple_find_label(input_data, proc->lset.labels[i], &mset_len, &mset)) {
+         /* mset - the set of members that match the specified label*/
+         for (j = 0; j < mset_len; j++ ) {
             found += member_match(proc, mset[j], mset[j], input_data);
-	 }
+         }
       }
    }
 
@@ -471,11 +488,9 @@ static int proc_process_meta(void * vinstance,       /* the instance */
    /* TODO - Perhaps I should push this code up to the inner for loop
     * above.  Then there would be a distinct vector for each matched
     * field */
-   if (found || proc->do_tag[type_index])
-   {
-      if (proc->matched_label && found)
-      {
-	 wsdata_add_label(input_data, proc->matched_label);
+   if (found || proc->do_tag[type_index]) {
+      if (proc->matched_label && found) {
+         wsdata_add_label(input_data, proc->matched_label);
       }
       
       /* now that the vector has been read, reset the counts */
@@ -498,9 +513,9 @@ static int proc_process_meta(void * vinstance,       /* the instance */
  * return 0 if not output
  *---------------------------------------------------------------------------*/
 static int proc_process_allstr(void * vinstance,     /* the instance */
-			       wsdata_t* input_data, /* incoming tuple */
-			       ws_doutput_t * dout,  /* output channel */
-			       int type_index) 
+                               wsdata_t* input_data, /* incoming tuple */
+                               ws_doutput_t * dout,  /* output channel */
+                               int type_index) 
 {
    proc_instance_t * proc = (proc_instance_t*)vinstance;
    wsdt_tuple_t * tuple = (wsdt_tuple_t*)input_data->data;
@@ -512,19 +527,16 @@ static int proc_process_allstr(void * vinstance,     /* the instance */
    wsdata_t * member;
    int found = 0;
    
-   for (i = 0; i < tlen; i++) 
-   {
+   for (i = 0; i < tlen; i++) {
       found = 0;
       member = tuple->member[i];
       found += member_match(proc, member, member, input_data);
 
-      if (found || proc->do_tag[type_index])
-      {
-	 if (proc->matched_label && found)
-	 {
-	    wsdata_add_label(input_data, proc->matched_label);
-	 }
-	 /* now that the vector has been read, reset the counts */
+      if (found || proc->do_tag[type_index]){
+         if (proc->matched_label && found){
+            wsdata_add_label(input_data, proc->matched_label);
+         }
+         /* now that the vector has been read, reset the counts */
          ws_set_outdata(input_data, proc->outtype_tuple, dout);
          proc->outcnt++;
       }
@@ -551,9 +563,9 @@ static int proc_process_allstr(void * vinstance,     /* the instance */
  * return 0 if not output
  *---------------------------------------------------------------------------*/
 static int proc_process_npkt(void * vinstance,       /* the instance */
-			     wsdata_t* input_data,   /* input npacket */
+                             wsdata_t* input_data,   /* input npacket */
                              ws_doutput_t * dout,    /* output channel */
-			     int type_index) 
+                             int type_index) 
 {
    proc_instance_t * proc = (proc_instance_t*)vinstance;
    npacket_t * npkt = (npacket_t*)input_data->data;
@@ -564,9 +576,9 @@ static int proc_process_npkt(void * vinstance,       /* the instance */
    {
       if (lookup_flow_tag(proc, npkt, input_data)) 
       {
-	 ws_set_outdata(input_data, proc->outtype_npkt, dout);
+         ws_set_outdata(input_data, proc->outtype_npkt, dout);
          proc->outcnt++;
-	 return 1;
+         return 1;
       }
    }
 
@@ -574,7 +586,7 @@ static int proc_process_npkt(void * vinstance,       /* the instance */
    {
       if (proc->fpkt_only && !wsdata_check_label(input_data, proc->label_fpkt))
       {
-	 return 1;
+         return 1;
       }
 
       u_char * buf = (u_char*)npkt->content;
@@ -584,19 +596,19 @@ static int proc_process_npkt(void * vinstance,       /* the instance */
       if ((mval = ac_singlesearch(proc->ac_struct, &ac_ptr,
                                       buf, buflen, &buf, &buflen)) >= 0) 
       {
-	 wslabel_t * mlabel = proc->term_vector[mval].label;
-	 
-	 if (proc->tag_flows) 
-	 {
-	    attach_flow_tag(proc, npkt, mlabel);
-	 }
+         wslabel_t * mlabel = proc->term_vector[mval].label;
+         
+         if (proc->tag_flows) 
+         {
+            attach_flow_tag(proc, npkt, mlabel);
+         }
 
-	 if (!wsdata_check_label(input_data, mlabel)) 
-	 {
-	    wsdata_add_label(input_data, mlabel);
-	 }
+         if (!wsdata_check_label(input_data, mlabel)) 
+         {
+            wsdata_add_label(input_data, mlabel);
+         }
 
-	 ws_set_outdata(input_data, proc->outtype_npkt, dout);
+         ws_set_outdata(input_data, proc->outtype_npkt, dout);
          proc->outcnt++;
       }
    }
@@ -642,23 +654,20 @@ int proc_destroy(void * vinstance) {
  * [out] rval      - 1 if okay, 0 if error.
  *---------------------------------------------------------------------------*/
 static int vectormatch_add_element(void *vinstance, void * type_table, 
-				   char *restr, unsigned int matchlen,
-				   char *labelstr)
+                                   char *restr, unsigned int matchlen,
+                                   char *labelstr, const re2::RE2::Options & opts)
 {
    wslabel_t *newlab;
    unsigned int match_id;
    proc_instance_t *proc = (proc_instance_t*)vinstance;
    /* push everything into a vector element */
-   if (proc->term_vector_len+1 < LOCAL_VECTOR_SIZE)
-   {
+   if (proc->term_vector_len+1 < LOCAL_VECTOR_SIZE) {
       newlab = wsregister_label(type_table, labelstr);
       match_id = proc->term_vector_len;
-      proc->term_vector[match_id].pattern = new re2::RE2(restr);
+      proc->term_vector[match_id].pattern = new re2::RE2(restr, opts);
       proc->term_vector[match_id].label = newlab;
       proc->term_vector_len++;
-   }
-   else
-   {
+   } else {
       fprintf(stderr, "proc_vectormatchre2.c: regex pattern table full.\n");
       return 0;
    }
@@ -702,7 +711,7 @@ static int process_hex_string(char * matchstr, int matchlen) {
  *   from label_match.c/label_match_loadfile.
  *---------------------------------------------------------------------------*/
 static int vectormatch_loadfile(void* vinstance, void* type_table,
-				char * thefile) 
+                                char * thefile, const re2::RE2::Options & opts) 
 {
    FILE * fp;
    char line [2001];
@@ -715,26 +724,22 @@ static int vectormatch_loadfile(void* vinstance, void* type_table,
 
    proc_instance_t *proc = (proc_instance_t*)vinstance;
    
-   if ((fp = sysutil_config_fopen(thefile,"r")) == NULL) 
-   {
+   if ((fp = sysutil_config_fopen(thefile,"r")) == NULL) {
       fprintf(stderr, 
-	      "Error: Could not open vectormatches file %s:\n  %s\n",
-	      thefile, strerror(errno));
+              "Error: Could not open vectormatches file %s:\n  %s\n",
+              thefile, strerror(errno));
       return 0;
    } 
    
-   while (fgets(line, 2000, fp)) 
-   {
+   while (fgets(line, 2000, fp))  {
       //strip return
       linelen = strlen(line);
-      if (line[linelen - 1] == '\n') 
-      {
-	 line[linelen - 1] = '\0';
-	 linelen--;
+      if (line[linelen - 1] == '\n')  {
+         line[linelen - 1] = '\0';
+         linelen--;
       }
-      if ((linelen <= 0) || (line[0] == '#')) 
-      {
-	 continue;
+      if ((linelen <= 0) || (line[0] == '#'))  {
+         continue;
       }
 
       linep = line;
@@ -742,83 +747,67 @@ static int vectormatch_loadfile(void* vinstance, void* type_table,
       match_label = NULL;
       
       // read line - exact seq
-      if (linep[0] == '"') 
-      {
-	 linep++;
-	 endofstring = (char *)rindex(linep, '"');
-	 if (endofstring == NULL) 
-	 {
-	    continue;
-	 }
+      if (linep[0] == '"')  {
+         linep++;
+         endofstring = (char *)rindex(linep, '"');
+         if (endofstring == NULL)  {
+            continue;
+         }
 
-	 endofstring[0] = '\0';
-	 matchstr = linep;
-	 matchlen = strlen(matchstr);
-	 //sysutil_decode_hex_escapes(matchstr, &matchlen);
-	 linep = endofstring + 1;
+         endofstring[0] = '\0';
+         matchstr = linep;
+         matchlen = strlen(matchstr);
+         //sysutil_decode_hex_escapes(matchstr, &matchlen);
+         linep = endofstring + 1;
       }
-      else 
-      if (linep[0] == '{') 
-      {
-	 linep++;
-	 endofstring = (char *)rindex(linep, '}');
-	 if (endofstring == NULL) 
-	 {
-	    continue;
-	 }
-	 endofstring[0] = '\0';
-	 matchstr = linep;
+      else  if (linep[0] == '{')  {
+         linep++;
+         endofstring = (char *)rindex(linep, '}');
+         if (endofstring == NULL)  {
+            continue;
+         }
+         endofstring[0] = '\0';
+         matchstr = linep;
 
-	 matchlen = process_hex_string(matchstr, strlen(matchstr));
-	 if (!matchlen) 
-	 {
-	    continue;
-	 }
-	 
-	 linep = endofstring + 1;
-      }
-      else 
-      {
-	 continue;
+         matchlen = process_hex_string(matchstr, strlen(matchstr));
+         if (!matchlen)  {
+            continue;
+         }
+         
+         linep = endofstring + 1;
+      } else  {
+         continue;
       }
 
       // Get the corresonding label 
-      if (matchstr) 
-      { 
-	 //find (PROTO)
-	 match_label = (char *) index(linep,'(');
-	 endofstring = (char *) rindex(linep,')');
+      if (matchstr) { 
+            //find (PROTO)
+            match_label = (char *) index(linep,'(');
+            endofstring = (char *) rindex(linep,')');
 
-	 if (match_label && endofstring && (match_label < endofstring)) 
-	 {
-	    match_label++;
-	    endofstring[0] = '\0';
-	 }
-	 else  
-	 {
-	    fprintf(stderr,
-		    "Error: no label corresponding to match string '%s'\n",
-		    matchstr);
+            if (match_label && endofstring && (match_label < endofstring)) 
+            {
+                match_label++;
+                endofstring[0] = '\0';
+            } else   {
+                fprintf(stderr,
+                    "Error: no label corresponding to match string '%s'\n",
+                    matchstr);
+                    sysutil_config_fclose(fp);
+                return 0;
+            }
+            linep = endofstring + 1;
+        }
+        if (!vectormatch_add_element(proc, type_table, matchstr, matchlen, 
+                                    match_label, opts))
+        {
             sysutil_config_fclose(fp);
-	    return 0;
-	 }
-	 linep = endofstring + 1;
+            return 0;
       }
-      if (match_label)
-      {
-      if (!vectormatch_add_element(proc, type_table, matchstr, matchlen, 
-				   match_label))
-      {
-         sysutil_config_fclose(fp);
-	 return 0;
-      }
-
       tool_print("Adding entry for string '%s' label '%s'",
-		 matchstr, match_label);
-      }
+                 matchstr, match_label);
 
    }
    sysutil_config_fclose(fp);
-
    return 1;
 }

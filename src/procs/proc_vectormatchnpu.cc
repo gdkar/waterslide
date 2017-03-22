@@ -97,42 +97,30 @@ extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL
 
 #if defined (MP_DOCS) || true
 extern "C" const char *const proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
-extern "C" const char proc_purpose[]     = "matches a list of regular expressions and returns a vector";
+extern "C" const char proc_purpose[]     = "matches a list of regular expressions and returns...... something";
 extern "C" const char *const proc_synopsis[] = {
     "vectormatchnpu [-V <label>] -F <file> [-L <label>] [-W] <label of string member to match>"
   , nullptr
     };
 extern "C" const char proc_description[] =
     "vectormatchnpu extends vectormatch to perform regular "
-    "expression matching.  vectormatchnpu will produce a vector of doubles "
-    "representing which patterns were matched.\n"
-    "\n"
+    "expression matching.\n"
     "vectormatchnpu uses LRL's NPU coprocessor. The format of the "
     "regular expressions are defined in re2/re2.h.\n"
     "\n"
-    "Each pattern to be matched can contain an optional weight, and "
-    "vectornorm can be used to compute various norms (weighted "
-    "and unweighted) of the resulting vector.\n"
-    "\n"
-    "Input file: same format as match, with an optional 3rd column "
-    "containing the weight; e.g.\n"
-    "\"select\" (SQL_SELECT)        0.8\n"
-    "\"union\"      (SQL_UNION)  1.0\n"
+    "\"select\" (SQL_SELECT)\n"
+    "\"union\"      (SQL_UNION)\n"
     "\n";
 
 extern "C" const proc_example_t proc_examples[] = {
-    {"...| vectormatchnpu -F \"re.txt\" -V MY_VECTOR MY_STRING |...\n",
-    "match the MY_STRING tuple member against the regular expressions in re.txt.    "
-    "Create a vector of the results and create a new vector of doubles under the "
-    " label of MY_VECTOR.  Only pass the tuples that match"},
-    {"...| vectormatchnpu -F \"re.txt\" -V MY_VECTOR -M MY_STRING |...\n",
+    {"...| vectormatchnpu -F \"re.txt\" -M MY_STRING |...\n",
     "apply the labels of the matched regular expressions in "
     "re.txt to the MY_STRING field."},
-    {"...| vectormatchnpu -F \"re.txt\" -V MY_VECTOR -L NPU_MATCH MY_STRING |...\n",
+    {"...| vectormatchnpu -F \"re.txt\" -L NPU_MATCH MY_STRING |...\n",
     "apply the label NPU_MATCH to the MY_STRING field if there was a match."},
-    {"...| TAG:vectormatchnpu -F \"re.txt\" -V MY_VECTOR -L NPU_MATCH MY_STRING |...\n",
+    {"...| TAG:vectormatchnpu -F \"re.txt\" -L NPU_MATCH MY_STRING |...\n",
     "pass all tuples, but tag the ones that had a match"},
-    {"...| vectormatchnpu -F \"re.txt\" -V MY_VECTOR |...\n",
+    {"...| vectormatchnpu -F \"re.txt\" |...\n",
     "match against all strings in the tuple"},
     {NULL,""}
 };
@@ -140,16 +128,12 @@ extern "C" const proc_example_t proc_examples[] = {
 extern "C" const proc_option_t proc_opts[] = {
     /*  'option character', "long option string", "option argument",
     "option description", <allow multiple>, <required>*/
-    {'V',"","label",
-    "attach vector and tag with <label>",0,0},
     {'F',"","file",
     "file with items to search",0,0},
     {'M',"","",
     "affix keyword label to matching tuple member",0,0},
     {'L',"","",
     "common label to affix to matched tuple member",0,0},
-    {'W',"","",
-    "use weighted counts",0,0},
     {'D',"","device",
     "device file to use.",0,0},
     {'E',"","expression",
@@ -231,7 +215,6 @@ struct vector_element
     size_t matchlen{};
     int    pid{-1};
     double count{};    /* freq. of occurrence of the element */
-    double weight{1.};         /* the weight (contained in the input file */
 };
 template<class It>
 struct iter_range : std::tuple<It,It> {
@@ -292,15 +275,12 @@ struct vectormatch_proc {
     npu_client                       *client{};
     int verbosity{};
     int status_size{1};
-    bool weighted_counts{}; /* should we weight the counts? */
     bool label_members{}; /* 1 if we should labels matched members*/
     bool pass_all{false}; /* 1 if we should labels matched members*/
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
    ~vectormatch_proc();
     void reset_counts();
-    int add_vector(wsdata_t* input_data);
-
     int loadfile(void *type_table, const char *filename);
 
     int cmd_options(
@@ -310,8 +290,7 @@ struct vectormatch_proc {
        );
     int add_element(void * type_table,
                 char *restr, unsigned int matchlen,
-                char *labelstr,
-                double weight);
+                char *labelstr);
     static int proc_process_meta(void *, wsdata_t*, ws_doutput_t*, int);
     static int proc_process_allstr(void *, wsdata_t*, ws_doutput_t*, int);
     static int proc_process_flush(void *, wsdata_t*, ws_doutput_t*, int);
@@ -372,18 +351,19 @@ vectormatch_proc::~vectormatch_proc()
                     }
                 }
             }
-            if (qd.nmatches && matched_label) /* this is the -L option label */
-                tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
-
-            if (qd.nmatches && vector_name)
-                add_vector(qd.input_data);
-
             if(qd.is_last) {
                 reset_counts();
+                if (got_match && matched_label) { /* this is the -L option label */
+                    wsdata_add_label(qd.input_data,matched_label);
+                    tuple_add_member_label(qd.input_data, /* the tuple itself */
+                            qd.input_data,    /* the tuple member to be added to */
+                            matched_label/* the label to be added */);
+                }
                 wsdata_delete(qd.input_data);
+                got_match = false;
+
             }
             cb_queue.front()->pop_front();
-            got_match = false;
         }
     }
     tool_print("meta_proc cnt %" PRIu64, meta_process_cnt);
@@ -433,7 +413,7 @@ int vectormatch_proc::cmd_options(
 //    matched_label = wsregister_label(type_table, "RESULT");
 //    vector_name   = wsregister_label(type_table, "VECTOR");
 
-    while ((op = getopt(argc, argv, "Pm:B:E:D:v::WV:F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "Pm:B:E:D:v::F:L:M")) != EOF) {
         switch (op) {
           case 'v':
                 if(optarg && *optarg == 'v') {
@@ -456,7 +436,7 @@ int vectormatch_proc::cmd_options(
                 break;
             }
             case 'E':{  /* label tuple data members that match */
-                if (!add_element(type_table, optarg, strlen(optarg)+1,nullptr, 1.)) {
+                if (!add_element(type_table, optarg, strlen(optarg)+1,nullptr)) {
                     tool_print("problem adding expression %s\n", optarg);
                 }
                 break;
@@ -467,7 +447,7 @@ int vectormatch_proc::cmd_options(
             }
 
             case 'B':{  /* label tuple data members that match */
-                if (!add_element(type_table, optarg,0,nullptr, 1.)) {
+                if (!add_element(type_table, optarg,0,nullptr)) {
                     tool_print("problem adding expression %s\n", optarg);
                 }
                 break;
@@ -491,25 +471,6 @@ int vectormatch_proc::cmd_options(
                 F_opt++;
                 break;
             }
-            case 'V': {
-                char temp[1200];
-                if (strlen(optarg) >= 1196) {
-                    fprintf(stderr,
-                        "Error: (vectormatchnpu) -V argument too long: %s\n",
-                        optarg);
-                    return 0;
-                }
-                vector_name = wsregister_label(type_table, optarg);
-//                vector_name = wsregister_label(type_table, optarg);
-
-                tool_print("setting vector label to %s", temp);
-                break;
-            }
-            case 'W': {
-                weighted_counts = true;
-                break;
-            }
-
             /* These are present in proc_match.  We may want to include them here
             * at some point */
 
@@ -549,9 +510,8 @@ int vectormatch_proc::cmd_options(
           error_print("failed to open NPU hardware device");
           return 0;
      }
+    npu_log_set_level(driver,(NPULogLevel)((int)NPU_WARN));
     
-//    auto temp_vector = term_vector;
-//    term_vector.clear();
     for(auto & term : term_vector) {
         if(term.matchlen) {
             auto pattern_id = npu_pattern_insert_pcre(
@@ -565,11 +525,8 @@ int vectormatch_proc::cmd_options(
                 continue;
             }
             term_map.emplace(pattern_id, std::ref(term));
-//            if((size_t)pattern_id >= term_vector.size())
-//                term_vector.resize(pattern_id+1);
-//            term_vector[pattern_id] = term;
-            tool_print("Loaded string '%s' label '%s' weight '%g' -> %d",
-                term.pattern.c_str(), term.label->name, term.weight,pattern_id);
+            tool_print("Loaded string '%s' label '%s' -> %d",
+                term.pattern.c_str(), term.label->name, pattern_id);
         }else{
             auto pattern_id = npu_pattern_insert_binary_file(
                 driver
@@ -580,16 +537,14 @@ int vectormatch_proc::cmd_options(
                 continue;
             }
             term_map.emplace(pattern_id, std::ref(term));
-/*            if((size_t)pattern_id >= term_vector.size())
-                term_vector.resize(pattern_id+1);
-            std::swap(term_vector[pattern_id], term);*/
-            tool_print("Loaded string '%s' label '%s' weight '%g' -> %d",
-                term.pattern.c_str(), term.label->name, term.weight,pattern_id);
+            tool_print("Loaded string '%s' label '%s' -> %d",
+                term.pattern.c_str(), term.label->name, pattern_id);
 
 
         }
     }
      npu_pattern_load(driver);
+     npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
      status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(driver));
      status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(driver),npu_pattern_capacity(driver));
      client = NULL;
@@ -728,30 +683,6 @@ void vectormatch_proc::reset_counts()
     for(auto & term : term_vector)
         term.count = 0;
 }
-
-/*-----------------------------------------------------------------------------
- * add_vector
- *  Adds the vector to the tuple.
- *---------------------------------------------------------------------------*/
-int vectormatch_proc::add_vector(wsdata_t* input_data)
-{
-    if(auto dt = (wsdt_vector_double_t*)tuple_member_create(input_data,
-             dtype_vector_double,
-             vector_name)) {
-
-        for(auto &&term : term_vector) {
-            auto count = (double)term.count;
-            if(weighted_counts)
-                count *= term.weight;
-            wsdt_vector_double_insert(dt, count);
-        }
-
-        return 1;
-    }
-    return 0; /* most likely the tuple is full */
-}
-
-
 /*-----------------------------------------------------------------------------
  * proc_process_meta
  *
@@ -814,38 +745,32 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
                 for(auto & term : eq_range) {
                     term.second.count+=1;
-//                term_vector[mval].count+= 1;
                 //i.e., is there a tuple member we are going to add to?
                 if (qd.member_data && label_members) {
                     /*get the label associated with the number returned by Aho-Corasick;
                     * default to label_match if one is not found. */
-                        auto mlabel = term.second.label;
+                    auto mlabel = term.second.label;
                     if(mlabel) {
                         if (!wsdata_check_label(qd.member_data, mlabel)) {
                             /* this allows labels to be indexed */
                             tuple_add_member_label(qd.input_data, /* the tuple itself */
                                     qd.member_data,    /* the tuple member to be added to */
                                     mlabel /* the label to be added */);
-                            if(matched_label)
-                                tuple_add_member_label(
-                                    qd.input_data, /* the tuple itself */
-                                    qd.member_data,    /* the tuple member to be added to */
-                                    matched_label/* the label to be added */);
-
-                            tuple_member_create_int(qd.input_data, term.second.pid, pattern_id_label);
                         }
                     }
+                    if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
+                        tuple_add_member_label(
+                            qd.input_data, /* the tuple itself */
+                            qd.member_data,    /* the tuple member to be added to */
+                            matched_label/* the label to be added */);
+
                 }
             }
             }
-
             if(qd.is_last) {
-                if (got_match && matched_label) /* this is the -L option label */
-                    tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
-
-                if (got_match && vector_name)
-                    add_vector(qd.input_data);
-
+                if (got_match && matched_label) { /* this is the -L option label */
+                    wsdata_add_label(qd.input_data,matched_label);
+                }
                 if(dout && (got_match || pass_all || do_tag[type_index])) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
@@ -956,7 +881,6 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                 for(auto & term : eq_range) {
                     term.second.count++;
 
-//                term_vector[mval].count++;
                 //i.e., is there a tuple member we are going to add to?
                 if (qd.member_data && label_members) {
                     /*get the label associated with the number returned by Aho-Corasick;
@@ -967,20 +891,23 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                         tuple_add_member_label(qd.input_data, /* the tuple itself */
                                 qd.member_data,    /* the tuple member to be added to */
                                 mlabel /* the label to be added */);
-                        tuple_member_create_int(qd.input_data, term .second.pid, pattern_id_label);
                     }
+                    if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
+                        tuple_add_member_label(
+                            qd.input_data, /* the tuple itself */
+                            qd.member_data,    /* the tuple member to be added to */
+                            matched_label/* the label to be added */);
+
                 }
             }
             }
 
             if(qd.is_last ){
-                if (got_match && matched_label) /* this is the -L option label */
-                    tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
+                if (got_match && matched_label) { /* this is the -L option label */
+                    wsdata_add_label(qd.input_data,matched_label);
+                }
 
                 if(got_match || pass_all || do_tag[type_index]) {
-                    if (got_match && qd.nmatches && vector_name)
-                        add_vector(qd.input_data);
-
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
@@ -1109,25 +1036,26 @@ int vectormatch_proc::process_allstr(
                     /*get the label associated with the number returned by Aho-Corasick;
                     * default to label_match if one is not found. */
                     auto mlabel = term.second.label;
-                    if (!wsdata_check_label(qd.member_data, mlabel)) {
+                    if (mlabel && !!wsdata_check_label(qd.member_data, mlabel)) {
                         /* this allows labels to be indexed */
                         tuple_add_member_label(qd.input_data, /* the tuple itself */
                                 qd.member_data,    /* the tuple member to be added to */
                                 mlabel /* the label to be added */);
-                        tuple_member_create_int(qd.input_data, term.second.pid, pattern_id_label);
                     }
+                    if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
+                        tuple_add_member_label(
+                            qd.input_data, /* the tuple itself */
+                            qd.member_data,    /* the tuple member to be added to */
+                            matched_label/* the label to be added */);
+
                 }
             }
             }
-
             if(qd.is_last) {
-                if (got_match && matched_label) /* this is the -L option label */
-                    tuple_add_member_label(qd.input_data,qd.input_data,matched_label);
-
+                if (got_match && matched_label) { /* this is the -L option label */
+                    wsdata_add_label(qd.input_data,matched_label);
+                }
                 if(got_match || pass_all || do_tag[type_index]) {
-                    if (vector_name && got_match )
-                        add_vector(qd.input_data);
-
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
@@ -1168,14 +1096,12 @@ int proc_destroy(void * vinstance)
  * [in] restr       - the input regex pattern/string
  * [in] matchlen     - the input string length
  * [in] labelstr     - string containing the label to be made
- * [in] weight      - the weight for the element.
  *
  * [out] rval       - 1 if okay, 0 if error.
  *---------------------------------------------------------------------------*/
 int vectormatch_proc::add_element(void * type_table,
                 char *restr, unsigned int matchlen,
-                char *labelstr,
-                double weight)
+                char *labelstr)
 {
     /* push everything into a vector element */
     auto newlab = labelstr ? wsregister_label(type_table, labelstr)
@@ -1187,7 +1113,6 @@ int vectormatch_proc::add_element(void * type_table,
     term_vector.back().matchlen = matchlen;
     term_vector.back().pid = term_vector.size();
     term_vector.back().label = newlab;
-    term_vector.back().weight = weight;
 
     return 1;
 }
@@ -1226,7 +1151,7 @@ static int process_hex_string(char * matchstr, int matchlen) {
 /*-----------------------------------------------------------------------------
  * vectormatch_loadfile
  *  read input match strings from input file.  This function is taken
- *  from label_match.c/label_match_loadfile, modified to allow for weights.
+ *  from label_match.c/label_match_loadfile, 
  *---------------------------------------------------------------------------*/
 int vectormatch_proc::loadfile(void* type_table,const char * thefile)
 {
@@ -1238,7 +1163,6 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
     int matchlen;
     char * endofstring;
     char * match_label;
-    double weight;
 
     if ((fp = sysutil_config_fopen(thefile,"r")) == NULL) {
         fprintf(stderr,
@@ -1306,29 +1230,14 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
                 sysutil_config_fclose(fp);
                 return 0;
             }
-
             linep = endofstring + 1;
         }
-
-        // Finally, get the weight if it exists
-        if (match_label)
-        {
-            char * weight_str;
-            char *char_ptr;
-
-            weight_str = strtok_r(linep, " \t", &char_ptr);
-            weight = (weight_str != NULL) ? strtof(weight_str, NULL) : 1.0;
-        } else {
-            weight = 1.0;
-        }
-        if (!add_element(type_table, matchstr, matchlen,
-                    match_label, weight)) {
+        if (!add_element(type_table, matchstr, matchlen,match_label)) {
             sysutil_config_fclose(fp);
             return 0;
         }
-
-        tool_print("Adding entry for string '%s' label '%s' weight '%g'",
-            matchstr, match_label, weight);
+        tool_print("Adding entry for string '%s' label '%s'",
+            matchstr, match_label);
 
     }
     sysutil_config_fclose(fp);
