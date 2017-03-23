@@ -5,9 +5,6 @@ pcap_in -r '../npu2_bench/nitroba.pcap' -> $wsproto_data
 $wsproto_data | flush -N -t 1s -> $flush_data
 #$wsproto_data | $npu_in
 $flush_data:TAG, $wsproto_data:TAG | vectormatchnpu CONTENT -D /dev/lrl_npu0 -L NPU_MATCH -m16  -F ../bench_regexes.list -v9  -> $npu_out
-#}
-#%thread(3) {
-#$npu_out | unbundle -> $re2_in
 $flush_data:TAG, $npu_out:TAG | vectormatchre2 CONTENT   -L RE2_MATCH  -F ../bench_regexes.preproc -> $re2_out
 }
 %thread(4) {
