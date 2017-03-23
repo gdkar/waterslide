@@ -9,9 +9,13 @@ $flush_data:TAG, $wsproto_data:TAG | vectormatchnpu CONTENT -D /dev/lrl_npu0 -L 
 #%thread(3) {
 #$npu_out | unbundle -> $re2_in
 $flush_data:TAG, $npu_out:TAG | vectormatchre2 CONTENT   -L RE2_MATCH  -F ../bench_regexes.preproc -> $re2_out
-#}
-#%thread(4) {
-$re2_out | calc ' if (exists(RE2_MATCH) && !exists(NPU_MATCH)) then MISSED=1 ; endif; if (!exists(RE2_MATCH) && exists(NPU_MATCH)) then EXTRA=1 ; endif; if (exists(RE2_MATCH) != exists(NPU_MATCH)) then ERROR=1 ; endif; if (exists(RE2_MATCH)) then MATCHED=1 ; endif; ' -> $matched
-$matched | labelstat | print -V
-$re2_out | labelstat
+}
+%thread(4) {
+$re2_out.RE2_MATCH, $re2_out.NPU_MATCH | calc ' if (exists(RE2_MATCH) && !exists(NPU_MATCH)) then MISSED=1 ; endif; if (!exists(RE2_MATCH) && exists(NPU_MATCH)) then EXTRA=1 ; endif; if (exists(RE2_MATCH) != exists(NPU_MATCH)) then ERROR=1 ; endif; if (exists(RE2_MATCH)) then MATCHED=1 ; endif; ' -> $matched
+$flush_data, $matched | labelstat -> $matched_stats
+$flush_data, $re2_out | labelstat -> $re2_stats
+$flush_data, $npu_out | bandwidth -> $npu_bandwidth
+$flush_data, $re2_out | bandwidth -> $re2_bandwidth
+$re2_bandwidth, $npu_bandwidth | print -V
+$re2_stats,$matched_stats | print -VV
 }

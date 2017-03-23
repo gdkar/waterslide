@@ -1,41 +1,48 @@
 #! /usr/bin/env python
 
-import time, sys,os, subprocess as sb
+import time, sys,os, subprocess as sb, pathlib
+import argparse,tempfile
 
-if 'TARGET' in os.environ:
-    target = os.environ['TARGET']
-else:
-    target = ' -r ../npu2_bench/packets.cut.wsproto  -r ../npu2_bench/packets.cut_pt001.wsproto  '
-target = target.strip()
-if not target.startswith('-r '):
-    target = ' -r ' + target
-method = sys.argv[1]
+parser = argparse.ArgumentParser("Do a waterslide benchmark run for the npu2_demo.")
+group = parser.add_mutually_exclusive_group()
+group.add_argument("-p", "--parallel", action = 'store_false',default=True, help='use waterslide-parallel.')
+group.add_argument("-s", "--serial", action = 'store_true',default=False, help='use waterslide.')
+parser.add_argument('-m','--method',action='store',choices=['npu2','vnpu','vectornpu','vectormatchnpu','vectormatchre2','vectorre2'], default='vectormatchnpu')
+parser.add_argument('-e','--expr',action='store',default='../bench_regexes.list')
+parser.add_argument('-t','--target',nargs='+',default=['../npu2_bench/packets.cut.wsproto','../npu2_bench/packest.cut_pt001.wsproto'])
 
+args = parser.parse_args()
+parallel = args.parallel or not args.serial
+ws_exec  = './waterslide-parallel' if parallel else './waterslide'
+pcap_in= [_ for _ in args.target if _.endswith('.pcap')]#pathlib.fnmatch.fnmatch(_, '**/*.pcap')]
+wsproto_in= [_ for _ in args.target if _.endswith('.wsproto') or _.endswith('.mpproto')]#$pathlib.fnmatch.fnmatch(_, '**/*.{wsproto,mpproto}')]
+with tempfile.NamedTemporaryFile() as script:
+    script.write('%thread(1){')
+    if pcap_in:
+        script.write('pcap_in -r ' + ' -r '.join(pcap_in) + ' -> $data_in\n')
+    if wsproto_in:
+        script.write('wsproto_in -r ' + ' -r '.join(wsproto_in) + ' -> $data_in\n')
 
-#if method == 're2':
-#    turbo = 1
-#else:
-#    turbo = 6
+    if parallel:
+        script .write( '}\n%thread(2){\n')
+    script .write( ' $data_in | {method} CONTENT -F {expr} -M -L RESULT -> $data_out\n'.format(method=args.method,expr = args.expr))
+    if parallel:
+        script.write('}\n%thread(3){\n')
+    script.write(
+        ' $data_out | labelstat -> $print_out\n' +
+        ' $data_out | bandwidth -> $print_out\n'
+        ' $print_out | print -VV\n' +
+        '}')
+    script.flush()
+    with open(script.name,'rb') as tmp:
+        print(tmp.read())
+    is_npu = args.method.endswith('npu')
+    fmt_string = 'r:{}' if is_npu else 'l:{}'
+    def ws_run():
+        start = time.time()
+        retval = sb.call([ws_exec ,'-F',script.name])
+        end = time.time()
+        print(fmt_string.format((end-start)))
 
-turbo = 1
-target = target * turbo
-
-#targets = ['../npu2_bench/packets.cut.wsproto'] + [ '../npu2_bench/packets.cut_pt{:03}.wsproto'.format(x) for x in range(1,turbo)]
-#target = ' -r '.join(targets)
-#target = ' -r '.join('../npu2_bench/packets.cut_pt{x:03}.wsproto'.format(x=x) for x in range(1,turbo+1))
-#target_turbo = '../npu2_bench/packets.cut_pt00{{1..{turbo}}}.wsproto'.format(turbo=turbo)
-def run_npu():
-    start = time.time()
-    retval = sb.call(['./waterslide','wsproto_in {target} | vectormatchnpu CONTENT -v4 -F ../npu2_bench_set.npup -L RESULT -M '.format(target=target)])
-    end = time.time()
-    print('r:{}'.format((end-start)/turbo))
-
-def run_vectormatchre2():
-    start = time.time()
-    retval = sb.call(['./waterslide','wsproto_in {target} | vectormatchre2 CONTENT -F ../npu2_bench_set.npup -L RESULT -M'.format(target=target)])
-    end = time.time()
-    print('l:{}'.format((end-start)/turbo))
-
-function = run_vectormatchre2 if method == 're2' else run_npu
-while True:
-    function()
+    while True:
+        ws_run()
