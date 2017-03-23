@@ -32,9 +32,6 @@ SOFTWARE.
 
 #ifdef __cplusplus
 CPP_OPEN
-#else
-#include <stdatomic.h>
-#define ws_atomic _Atomic
 #endif // __cplusplus
 
 /* stack implemented as single-linked list */
