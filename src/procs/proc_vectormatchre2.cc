@@ -703,6 +703,26 @@ static int process_hex_string(char * matchstr, int matchlen) {
      
      return soffset;
 }
+namespace {
+const char* find_escaped (const char *ptr,const char *pend, char val)
+{
+    if(!ptr)
+        return nullptr;
+    auto ok0 = [](const char*a, const char*b)->bool{return a != b;};
+    auto ok1 = [](const char*a, const char* )->bool{return *a;   };
+    auto ok = pend ? ok0 : ok1;
+    for(; ok(ptr,pend); ++ptr) {
+        auto c = *ptr;
+        if(c == '\\') {
+            if(!ok(++ptr,pend))
+                break;
+        }else if(c == val) {
+            return ptr;
+        }
+    }
+    return pend;
+};
+}
 
 
 /*-----------------------------------------------------------------------------
@@ -747,65 +767,61 @@ static int vectormatch_loadfile(void* vinstance, void* type_table,
       match_label = NULL;
       
       // read line - exact seq
-      if (linep[0] == '"')  {
-         linep++;
-         endofstring = (char *)rindex(linep, '"');
-         if (endofstring == NULL)  {
+        if (linep[0] == '"') {
+            endofstring = (char*)find_escaped(linep + 1,nullptr,'"');
+//            linep++;
+//            endofstring = (char *)rindex(linep, '"');
+            if (endofstring == NULL)
             continue;
-         }
 
-         endofstring[0] = '\0';
-         matchstr = linep;
-         matchlen = strlen(matchstr);
-         //sysutil_decode_hex_escapes(matchstr, &matchlen);
-         linep = endofstring + 1;
-      }
-      else  if (linep[0] == '{')  {
-         linep++;
-         endofstring = (char *)rindex(linep, '}');
-         if (endofstring == NULL)  {
+            endofstring[0] = '\0';
+            matchstr = linep + 1;
+            matchlen = strlen(matchstr);
+            //sysutil_decode_hex_escapes(matchstr, &matchlen);
+            linep = endofstring + 1;
+        } else if (linep[0] == '{') {
+            linep++;
+            endofstring = (char *)index(linep, '}');
+            if (endofstring == NULL)
+                continue;
+            endofstring[0] = '\0';
+            matchstr = linep;
+            matchlen = process_hex_string(matchstr, strlen(matchstr));
+            if (!matchlen)
+                continue;
+
+            linep = endofstring + 1;
+        } else {
             continue;
-         }
-         endofstring[0] = '\0';
-         matchstr = linep;
+        }
 
-         matchlen = process_hex_string(matchstr, strlen(matchstr));
-         if (!matchlen)  {
-            continue;
-         }
-         
-         linep = endofstring + 1;
-      } else  {
-         continue;
-      }
-
-      // Get the corresonding label 
-      if (matchstr) { 
+        // Get the corresonding label
+        if (matchstr) {
             //find (PROTO)
             match_label = (char *) index(linep,'(');
-            endofstring = (char *) rindex(linep,')');
+            endofstring = (char *) index(linep,')');
+//            endofstring = match_label ? (char *) find_escaped(match_label,nullptr, ')') : nullptr;
 
-            if (match_label && endofstring && (match_label < endofstring)) 
-            {
+            if (match_label && endofstring && (match_label < endofstring)) {
                 match_label++;
                 endofstring[0] = '\0';
-            } else   {
+            } else {
                 fprintf(stderr,
                     "Error: no label corresponding to match string '%s'\n",
                     matchstr);
-                    sysutil_config_fclose(fp);
+                sysutil_config_fclose(fp);
                 return 0;
             }
             linep = endofstring + 1;
+            if (!vectormatch_add_element(proc, type_table, matchstr, matchlen, 
+                                        match_label, opts))
+            {
+                sysutil_config_fclose(fp);
+                return 0;
+            }
+            tool_print("Adding entry for string '%s' label '%s'",
+                    matchstr, match_label);
         }
-        if (!vectormatch_add_element(proc, type_table, matchstr, matchlen, 
-                                    match_label, opts))
-        {
-            sysutil_config_fclose(fp);
-            return 0;
-      }
-      tool_print("Adding entry for string '%s' label '%s'",
-                 matchstr, match_label);
 
    }
    sysutil_config_fclose(fp);

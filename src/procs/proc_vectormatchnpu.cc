@@ -335,9 +335,7 @@ vectormatch_proc::~vectormatch_proc()
                 auto mval = qd.matches[i];
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
                 for(auto & term : eq_range) {
-//                if(mval >= 0 && mval <  term_vector.size()) {
-//                    auto &term = term_vector[mval];
-//                    term.second.count++;
+                    term.second.count++;
                     //i.e., is there a tuple member we are going to add to?
                     if (qd.member_data && label_members) {
                         /*get the label associated with the number returned by Aho-Corasick;
@@ -345,18 +343,24 @@ vectormatch_proc::~vectormatch_proc()
                         auto mlabel = term.second.label;
                         if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
                             /* this allows labels to be indexed */
-                            tuple_add_member_label(qd.input_data, /* the tuple itself */
+                            tuple_add_member_label(
+                                    qd.input_data, /* the tuple itself */
                                     qd.member_data,    /* the tuple member to be added to */
                                     mlabel /* the label to be added */);
-                            tuple_member_create_int(qd.input_data, term.second.pid, pattern_id_label);
                         }
+                        tuple_member_create_int(
+                            qd.input_data,
+                            term.second.pid,
+                            pattern_id_label);
                     }
                 }
             }
             if(qd.is_last) {
                 reset_counts();
                 if (got_match && matched_label) { /* this is the -L option label */
-                    wsdata_add_label(qd.input_data,matched_label);
+                    wsdata_add_label(
+                        qd.input_data,
+                        matched_label);
                     tuple_add_member_label(qd.input_data, /* the tuple itself */
                             qd.input_data,    /* the tuple member to be added to */
                             matched_label/* the label to be added */);
@@ -412,8 +416,6 @@ int vectormatch_proc::cmd_options(
     int op;
     int F_opt = 0;
     pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
-//    matched_label = wsregister_label(type_table, "RESULT");
-//    vector_name   = wsregister_label(type_table, "VECTOR");
 
     while ((op = getopt(argc, argv, "Pm:B:E:D:v::F:L:M")) != EOF) {
         switch (op) {
@@ -449,7 +451,7 @@ int vectormatch_proc::cmd_options(
             }
 
             case 'B':{  /* label tuple data members that match */
-                if (!add_element(type_table, optarg, nullptr, strlen(optarg)+1,nullptr)) {
+                if (!add_element(type_table, nullptr,optarg, 0,nullptr)) {
                     tool_print("problem adding expression %s\n", optarg);
                 }
                 break;
@@ -1162,19 +1164,18 @@ static int process_hex_string(char * matchstr, int matchlen) {
 namespace {
 const char* find_escaped (const char *ptr,const char *pend, char val)
 {
-    auto esc = false;
     if(!ptr)
         return nullptr;
-    for(;(pend ? (ptr != pend) : *ptr); ++ptr) {
+    auto ok0 = [](const char*a, const char*b)->bool{return a != b;};
+    auto ok1 = [](const char*a, const char* )->bool{return *a;   };
+    auto ok = pend ? ok0 : ok1;
+    for(; ok(ptr,pend); ++ptr) {
         auto c = *ptr;
-        if(esc) {
-            esc = false;
-        }else{
-            if(c == '\\') {
-                esc = true;
-            }else if(c == val) {
-                return ptr;
-            }
+        if(c == '\\') {
+            if(!ok(++ptr,pend))
+                break;
+        }else if(c == val) {
+            return ptr;
         }
     }
     return pend;
@@ -1195,7 +1196,6 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
     char * matchstr = nullptr;
     int    matchlen;
     char * binstr = nullptr;
-    int    binlen;
     char * endofstring = nullptr;
     char * match_label = nullptr;
 
@@ -1269,7 +1269,6 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
             linep = endofstring + 1;
         }
         if (match_label) {
-            const char whitespace[] = " \t";
             binstr = std::find_if(linep,datap, [](char x){return x != ' ' && x != '\t';});
             if(binstr && binstr!= datap) {
                 if(*binstr== '"') {
