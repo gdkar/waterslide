@@ -91,7 +91,7 @@ extern "C" int proc_destroy(
     );
  
 const char proc_name[] = PROC_NAME;
-const char proc_version[]    = "1.0";
+const char proc_version[]    = "1.0.1-rc.1";
 const char * const proc_alias[]     = { "vectorre2", NULL };
 const char *const proc_tags[]     = { "match", "vector", NULL };
 const char proc_purpose[]    = "matches a list of regular expressions and returns results";

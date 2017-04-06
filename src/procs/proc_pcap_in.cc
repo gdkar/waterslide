@@ -59,7 +59,7 @@ SOFTWARE.
 
 // TODO: as part of file metadata, include file offset and record length
 
-extern "C" const char proc_version[]     = "0.1";
+extern "C" const char proc_version[]     = "0.1.1-rc.1";
 extern "C" const char *const proc_tags[]     = { "pcap","input", NULL };
 extern "C" const char *const proc_alias[]     = { "pcap","pcap_in","pcap_filein", NULL };
 extern "C" const char proc_name[]       = PROC_NAME;
