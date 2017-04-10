@@ -652,7 +652,6 @@ proc_process_t vectormatch_proc::input_set(
     if (wsdatatype_match(type_table, input_type, "TUPLE_TYPE")){
         if (!outtype_tuple)
             outtype_tuple = ws_add_outtype(olist, dtype_tuple, NULL);
-
         // Are we searching only on data associated with specific labels,
         // or anywhere in the tuple?
         if (!lset.len) {
@@ -820,7 +819,11 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
             if(nbin) {
                 wsdata_add_reference(input_data);
                 submitted = true;
+
                 for(auto j = 0; j < members_len && !bail; ++j) {
+                    if(!(members[j]->dtype == dtype_binary
+                    || members[j]->dtype == dtype_string))
+                        continue;
                     auto member = members[j];
                     if(cb_queue.empty() || cb_queue.back()->full()) {
                         cb_queue.emplace_back(new callback_batch());
@@ -912,15 +915,13 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                             qd.member_data,    /* the tuple member to be added to */
                             matched_label/* the label to be added */);
 
+                    }
                 }
             }
-            }
-
             if(qd.is_last ){
                 if (got_match && matched_label) { /* this is the -L option label */
                     wsdata_add_label(qd.input_data,matched_label);
                 }
-
                 if(got_match || pass_all || do_tag[type_index]) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
@@ -974,6 +975,8 @@ int vectormatch_proc::process_allstr(
         wsdata_add_reference(input_data);
         for(auto j = 0; j < members_len && !bail; ++j) {
             auto member = members[j];
+            if(member->dtype != dtype_binary && member->dtype != dtype_string)
+                continue;
             if(cb_queue.empty() || cb_queue.back()->full()) {
                 cb_queue.emplace_back(new callback_batch());
             }
