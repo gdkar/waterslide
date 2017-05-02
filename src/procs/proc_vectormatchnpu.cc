@@ -31,6 +31,7 @@
 #include <algorithm>   //sqrt
 #include <memory>
 #include <deque>
+#include <bitset>
 #include <vector>
 #include <array>
 #include <list>
@@ -92,7 +93,7 @@ int proc_destroy(
  *---------------------------------------------------------------------------*/
 
 extern "C" const char proc_name[]        = PROC_NAME;
-extern "C" const char proc_version[]     = "0.1.1-rc.1";
+extern "C" const char proc_version[]     = "0.1.2-rc.1";
 extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
@@ -190,6 +191,13 @@ struct callback_data {
     bool              hw_overflow{false};
     bool              qd_overflow{false};
     std::atomic<bool> is_done{false};
+    void reset()
+    {
+        input_data = member_data = nullptr;
+        nmatches = 0;
+        hw_overflow = qd_overflow = is_last = false;
+        is_done.store(false);
+    }
 };
 
 struct callback_batch {
@@ -200,23 +208,57 @@ struct callback_batch {
 
     callback_data&front() { return data[rptr];}
     callback_data&back()  { return data[wptr-1];}
-    void emplace_back()   { wptr++; }
+    void emplace_back()   { wptr++;back().reset();}
     void pop_back()   { --wptr; }
     void pop_front()      { if(front().is_done.load()) rptr++; }
     size_t size() const   { return wptr - rptr;}
     bool   empty() const  { return wptr == rptr;}
     bool   full() const   { return wptr == capacity;}
 };
+struct pattern_group {
+    std::vector<std::string> patterns{};
+    std::vector<std::string> binaries{};
+    wslabel_t               *label{};
+    int                      threshold{1};
+    int                      pid{-1};
+    pattern_group() = default;
+    pattern_group(const pattern_group & ) = default;
+    pattern_group(pattern_group && ) = default;
+    pattern_group&operator=(const pattern_group & ) = default;
+    pattern_group&operator=(pattern_group && ) = default;
+    pattern_group(wslabel_t *l, int t = 1, int p = -1)
+    : label{l}, threshold{t}, pid{p}{}
 
+    size_t size() const { return patterns.size();}
+    std::pair<std::string&,std::string&> operator[](int idx)
+    {
+        return {patterns[idx],binaries[idx]};
+    }
+    std::pair<const std::string&,const std::string&> operator[](int idx) const
+    {
+        return {patterns[idx],binaries[idx]};
+    }
+    std::pair<const std::string&,const std::string&> at(int idx) const
+    {
+        return {patterns.at(idx),binaries.at(idx)};
+    }
+
+    void emplace_back(const std::string &pat, const std::string &bin)
+    {
+        patterns.emplace_back(pat);
+        binaries.emplace_back(bin);
+    }
+};
 struct vector_element
 {
     std::string pattern;
     std::string binfile;
     wslabel_t *label{};      /* the label associated with the vector element */
     size_t matchlen{};
+    int    threshold{0};
     int    pid{-1};
-    double count{};    /* freq. of occurrence of the element */
 };
+namespace {
 template<class It>
 struct iter_range : std::tuple<It,It> {
     using traits_type = typename std::iterator_traits<It>;
@@ -245,6 +287,7 @@ iter_range<It> make_iter_range( Tup && tup)
 {
     return { std::forward<Tup >(tup) };
 }
+}
 /*-----------------------------------------------------------------------------
  *              P R O C _ I N S T A N C E
  *---------------------------------------------------------------------------*/
@@ -256,15 +299,17 @@ struct vectormatch_proc {
     uint64_t qd_overflow{};
     int      max_status{};
     ws_outtype_t *  outtype_tuple{};
-    wslabel_t * pattern_id_label{};   /* label affixed to the buffer that matches*/
+//    wslabel_t * pattern_id_label{};   /* label affixed to the buffer that matches*/
     wslabel_t * matched_label{};   /* label affixed to the buffer that matches*/
     wslabel_t * vector_name{};      /* label to be affixed to the matched vector */
     wslabel_set_t    lset{};        /* set of labels to search over */
 
-    int do_tag[LOCAL_MAX_TYPES];
+    std::bitset<LOCAL_MAX_TYPES> do_tag{};
 
-    std::vector<vector_element> term_vector{};
-    std::multimap<int, vector_element&> term_map{};
+    std::map<wslabel_t *, pattern_group> term_groups{};
+    std::multimap<int, pattern_group&>   term_map   {};
+//    std::vector<vector_element> term_vector{};
+//    std::multimap<int, vector_element&> term_map{};
 
     std::deque<
         std::unique_ptr<
@@ -281,7 +326,6 @@ struct vectormatch_proc {
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
    ~vectormatch_proc();
-    void reset_counts();
     int loadfile(void *type_table, const char *filename);
 
     int cmd_options(
@@ -299,6 +343,7 @@ struct vectormatch_proc {
     int process_meta(wsdata_t*, ws_doutput_t*, int);
     int process_allstr(wsdata_t*, ws_doutput_t*, int);
     int process_flush(wsdata_t*, ws_doutput_t*, int);
+    int process_common(wsdata_t*, ws_doutput_t*, int);
 
     proc_process_t input_set(
         wsdatatype_t * input_type
@@ -335,7 +380,6 @@ vectormatch_proc::~vectormatch_proc()
                 auto mval = qd.matches[i];
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
                 for(auto & term : eq_range) {
-                    term.second.count++;
                     //i.e., is there a tuple member we are going to add to?
                     if (qd.member_data && label_members) {
                         /*get the label associated with the number returned by Aho-Corasick;
@@ -348,15 +392,10 @@ vectormatch_proc::~vectormatch_proc()
                                     qd.member_data,    /* the tuple member to be added to */
                                     mlabel /* the label to be added */);
                         }
-                        tuple_member_create_int(
-                            qd.input_data,
-                            term.second.pid,
-                            pattern_id_label);
                     }
                 }
             }
             if(qd.is_last) {
-                reset_counts();
                 if (got_match && matched_label) { /* this is the -L option label */
                     wsdata_add_label(
                         qd.input_data,
@@ -398,7 +437,7 @@ static int vectormatch_npu_log_cb(void *, int level, const char *fmt, va_list ar
 const proc_labeloffset_t proc_labeloffset[] = {
 //    {"MATCH",offsetof(proc_instance_t, umatched_label)},
 //    {"VECTOR",offsetof(proc_instance_t,vector_name)},
-    {"PATTERN_ID",offsetof(vectormatch_proc, pattern_id_label)}
+//    {"PATTERN_ID",offsetof(vectormatch_proc, pattern_id_label)}
 };
 
 /*-----------------------------------------------------------------------------
@@ -415,11 +454,11 @@ int vectormatch_proc::cmd_options(
 {
     int op;
     int F_opt = 0;
-    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
+//    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 
     while ((op = getopt(argc, argv, "Pm:B:E:D:v::F:L:M")) != EOF) {
         switch (op) {
-          case 'v':
+          case 'v':{
                 if(optarg && *optarg == 'v') {
                     while(*optarg++ == 'v') {
                         ++verbosity;
@@ -430,7 +469,7 @@ int vectormatch_proc::cmd_options(
                     ++verbosity;
                 }
                break;
-
+            }
             case 'M':{  /* label tuple data members that match */
                 label_members = true;
                 break;
@@ -449,7 +488,6 @@ int vectormatch_proc::cmd_options(
                 pass_all = true;
                 break;
             }
-
             case 'B':{  /* label tuple data members that match */
                 if (!add_element(type_table, nullptr,optarg, 0,nullptr)) {
                     tool_print("problem adding expression %s\n", optarg);
@@ -488,7 +526,6 @@ int vectormatch_proc::cmd_options(
             proc->label_fpkt = wsregister_label(type_table, "FIRSTPKT");
             break;
             */
-
             default: {
                 tool_print("Unknown command option supplied");
                 exit(-1);
@@ -496,7 +533,7 @@ int vectormatch_proc::cmd_options(
         }
     }
 
-    if (term_vector.empty()) {
+    if (term_groups.empty()) {
         tool_print("ERROR: -F <filename> option is required.");
         exit(-1);
     }
@@ -515,15 +552,66 @@ int vectormatch_proc::cmd_options(
           return 0;
      }
     npu_log_set_level(driver,(NPULogLevel)((int)NPU_WARN));
-    
-    for(auto & term : term_vector) {
-        if(!term.binfile.empty()) {
+    for(auto & gpair: term_groups) {
+        auto & grp = gpair.second;
+        if(grp.size() > 1) {
+            auto gexpr = std::vector<const char*>{};
+            auto gbins = std::vector<const void *>{};
+            auto gelen = std::vector<size_t>{};
+            auto gblen = std::vector<size_t>{};
+
+            for(auto i = 0ul; i < grp.size(); ++ i) {
+                auto item = grp.at(i);
+                gexpr.push_back(item.first.c_str());
+                gelen.push_back(item.first.size() + 1);
+                gbins.push_back(item.second.data());
+                gblen.push_back(item.second.size());
+            }
+            auto pattern_id = npu_pattern_insert_group(
+                driver
+                , gexpr.data()
+                , gelen.data()
+                , gbins.data()
+                , gblen.data()
+                , grp.size()
+                , grp.threshold
+                , false
+                , ""
+                );
+            if(pattern_id < 0) {
+                error_print("failed to insert pattern group '%s', %zu patterns, threshold %d", gpair.first->name,grp.size(),grp.threshold);
+                continue;
+            }
+            grp.pid = pattern_id;
+            term_map.emplace(pattern_id, std::ref(grp));
+            tool_print("Loaded group '%s', threshold %d, containing:",gpair.first->name,grp.threshold);
+            for(auto && e : gexpr) {
+                tool_print("\t%s",e);
+            }
+        }else{
+            auto vals = grp.at(0);
+            auto pattern_id = npu_pattern_insert_pcre(
+                driver
+                , vals.first.c_str()
+                , vals.first.size()
+                , ""
+                );
+            if(pattern_id < 0) {
+                error_print("failed to insert pattern '%s'", vals.first.c_str());
+                continue;
+            }
+            grp.pid = pattern_id;
+            term_map.emplace(pattern_id, std::ref(grp));
+            tool_print("Loaded string '%s' label '%s' -> %d",
+                vals.first.c_str(), grp.label->name, pattern_id);
+        }
+/*        if(!term.binfile.empty()) {
             auto pattern_id = npu_pattern_insert_binary_file(
                 driver
               , term.binfile.c_str()
                 );
             if(pattern_id < 0) {
-                error_print("failed to open to insert pattern '%s', file '%s'", term.pattern.c_str(), term.binfile.c_str());
+                error_print("failed to insert pattern '%s', file '%s'", term.pattern.c_str(), term.binfile.c_str());
                 continue;
             }
             term_map.emplace(pattern_id, std::ref(term));
@@ -537,7 +625,7 @@ int vectormatch_proc::cmd_options(
               , ""
                 );
             if(pattern_id < 0) {
-                error_print("failed to open to insert pattern '%s'", term.pattern.c_str());
+                error_print("failed to insert pattern '%s'", term.pattern.c_str());
                 continue;
             }
             term_map.emplace(pattern_id, std::ref(term));
@@ -549,19 +637,19 @@ int vectormatch_proc::cmd_options(
               , term.pattern.c_str()
                 );
             if(pattern_id < 0) {
-                error_print("failed to open to insert pattern %s", term.pattern.c_str());
+                error_print("failed to insert pattern %s", term.pattern.c_str());
                 continue;
             }
             term_map.emplace(pattern_id, std::ref(term));
             tool_print("Loaded string '%s' label '%s' -> %d",
                 term.pattern.c_str(), term.label->name, pattern_id);
-        }
-    }
+        }*/
+     }
      npu_pattern_load(driver);
      npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
      status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(driver));
      status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(driver),npu_pattern_capacity(driver));
-     client = NULL;
+     client = nullptr;
      if(npu_client_attach(&client,driver) < 0) {
           error_print("could not crete a client for holding reference to npuDriver");
           return 0;
@@ -645,7 +733,7 @@ proc_process_t vectormatch_proc::input_set(
         return nullptr;
 
     if (wslabel_match(type_table, port, "TAG"))
-        do_tag[type_index] = 1;
+        do_tag[type_index] = true;
 
     // RDS - eliminated the NFLOW_REC and the NPACKET types.
     // TODO:  need to determine whether NPACKET is a type we want to support.
@@ -684,17 +772,6 @@ static void cleanup_cb(void *opaque)
 {
     auto priv = static_cast<callback_data*>(opaque);
     priv->is_done.store(true);
-}
-
-/*-----------------------------------------------------------------------------
- * reset_counts
- *
- *
- *---------------------------------------------------------------------------*/
-void vectormatch_proc::reset_counts()
-{
-    for(auto & term : term_vector)
-        term.count = 0;
 }
 /*-----------------------------------------------------------------------------
  * proc_process_meta
@@ -737,54 +814,57 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
         npu_client_free(&client);
         npu_thread_stop(driver);
     }
+    return process_common(input_data,dout,type_index);
+}
+int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
+{
+    auto found = 0;
     while(!cb_queue.empty()) {
         if(cb_queue.front()->empty())
             cb_queue.pop_front();
         else {
             auto &qd = cb_queue.front()->front();
             if(!qd.is_done.load())
-                continue;
+                break;
+            found += qd.nmatches;
             if(qd.nmatches && !got_match) {
                 hits++;
                 got_match = true;
             }
+            max_status = std::max<int>(max_status,qd.nmatches);
             if(qd.hw_overflow)
                 hw_overflow++;
             if(qd.qd_overflow)
                 qd_overflow++;
-            max_status = std::max<int>(max_status,qd.nmatches);
             for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
                 for(auto & term : eq_range) {
-                    term.second.count+=1;
+
                 //i.e., is there a tuple member we are going to add to?
                 if (qd.member_data && label_members) {
                     /*get the label associated with the number returned by Aho-Corasick;
                     * default to label_match if one is not found. */
                     auto mlabel = term.second.label;
-                    if(mlabel) {
-                        if (!wsdata_check_label(qd.member_data, mlabel)) {
-                            /* this allows labels to be indexed */
-                            tuple_add_member_label(qd.input_data, /* the tuple itself */
-                                    qd.member_data,    /* the tuple member to be added to */
-                                    mlabel /* the label to be added */);
-                        }
+                    if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
+                        /* this allows labels to be indexed */
+                        tuple_add_member_label(qd.input_data, /* the tuple itself */
+                                qd.member_data,    /* the tuple member to be added to */
+                                mlabel /* the label to be added */);
                     }
                     if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
                         tuple_add_member_label(
                             qd.input_data, /* the tuple itself */
                             qd.member_data,    /* the tuple member to be added to */
                             matched_label/* the label to be added */);
-
+                    }
                 }
             }
-            }
-            if(qd.is_last) {
+            if(qd.is_last ){
                 if (got_match && matched_label) { /* this is the -L option label */
                     wsdata_add_label(qd.input_data,matched_label);
                 }
-                if(dout && (got_match || pass_all || do_tag[type_index])) {
+                if(got_match || pass_all || do_tag[type_index]) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
@@ -794,14 +874,13 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
             cb_queue.front()->pop_front();
         }
     }
-    return 1;
+    return found ? 1 : 0;
 }
 int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
     meta_process_cnt++;
-    wsdata_t ** members;
-    int members_len;
-    int found = 0;
+    wsdata_t ** members = nullptr;
+    auto members_len = 0;
     auto submitted = false;
     /* lset - the list of labels we will be searching over.
     * Iterate over these labels and call match on each of them */
@@ -832,10 +911,6 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                     auto &qd = cb_queue.back()->back();
                     qd.input_data = input_data;
                     qd.member_data= member;
-                    qd.is_done.store(false);
-                    qd.hw_overflow = 0;
-                    qd.qd_overflow = 0;
-                    qd.nmatches    = 0;
                     qd.is_last     = (++nsub == nbin);
                     auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
                     if(err < 0) {
@@ -875,65 +950,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++outcnt;
     }
-    while(!cb_queue.empty()) {
-        if(cb_queue.front()->empty())
-            cb_queue.pop_front();
-        else {
-            auto &qd = cb_queue.front()->front();
-            if(!qd.is_done.load())
-                break;
-            found += qd.nmatches;
-            if(qd.nmatches && !got_match) {
-                hits++;
-                got_match = true;
-            }
-            max_status = std::max<int>(max_status,qd.nmatches);
-            if(qd.hw_overflow)
-                hw_overflow++;
-            if(qd.qd_overflow)
-                qd_overflow++;
-            for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
-                auto mval = qd.matches[i];
-                auto eq_range = make_iter_range(term_map.equal_range(mval));
-                for(auto & term : eq_range) {
-                    term.second.count++;
-
-                //i.e., is there a tuple member we are going to add to?
-                if (qd.member_data && label_members) {
-                    /*get the label associated with the number returned by Aho-Corasick;
-                    * default to label_match if one is not found. */
-                    auto mlabel = term.second.label;
-                    if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
-                        /* this allows labels to be indexed */
-                        tuple_add_member_label(qd.input_data, /* the tuple itself */
-                                qd.member_data,    /* the tuple member to be added to */
-                                mlabel /* the label to be added */);
-                    }
-                    if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
-                        tuple_add_member_label(
-                            qd.input_data, /* the tuple itself */
-                            qd.member_data,    /* the tuple member to be added to */
-                            matched_label/* the label to be added */);
-
-                    }
-                }
-            }
-            if(qd.is_last ){
-                if (got_match && matched_label) { /* this is the -L option label */
-                    wsdata_add_label(qd.input_data,matched_label);
-                }
-                if(got_match || pass_all || do_tag[type_index]) {
-                    ws_set_outdata(qd.input_data, outtype_tuple, dout);
-                  ++outcnt;
-                }
-                reset_counts();
-                wsdata_delete(qd.input_data);
-                got_match = false;
-            }
-            cb_queue.front()->pop_front();
-        }
-    }
-    return found ? 1 : 0;
+    return process_common(input_data,dout,type_index);
 }
 
 /*-----------------------------------------------------------------------------
@@ -954,7 +971,6 @@ int vectormatch_proc::process_allstr(
 
 
     meta_process_cnt++;
-    auto found = 0;
     auto submitted = false;
     /* lset - the list of labels we will be searching over.
     * Iterate over these labels and call match on each of them */
@@ -984,10 +1000,6 @@ int vectormatch_proc::process_allstr(
             auto &qd = cb_queue.back()->back();
             qd.input_data = input_data;
             qd.member_data= member;
-            qd.is_done.store(false);
-            qd.hw_overflow = 0;
-            qd.qd_overflow = 0;
-            qd.nmatches    = 0;
             qd.is_last     = (++nsub == nbin);
             submitted = true;
             auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
@@ -1026,64 +1038,7 @@ int vectormatch_proc::process_allstr(
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++outcnt;
     }
-    while(!cb_queue.empty()) {
-        if(cb_queue.front()->empty())
-            cb_queue.pop_front();
-        else {
-            auto &qd = cb_queue.front()->front();
-            if(!qd.is_done.load())
-                break;
-            found += qd.nmatches;
-            max_status = std::max<int>(max_status,qd.nmatches);
-            if(qd.hw_overflow)
-                hw_overflow++;
-            if(qd.qd_overflow)
-                qd_overflow++;
-            if(qd.nmatches && !got_match) {
-                hits++;
-                got_match = true;
-            }
-            for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
-                auto mval = qd.matches[i];
-                auto eq_range = make_iter_range(term_map.equal_range(mval));
-                for(auto & term : eq_range) {
-                    term.second.count++;
-                //i.e., is there a tuple member we are going to add to?
-                if (qd.member_data && label_members) {
-                    /*get the label associated with the number returned by Aho-Corasick;
-                    * default to label_match if one is not found. */
-                    auto mlabel = term.second.label;
-                    if (mlabel && !!wsdata_check_label(qd.member_data, mlabel)) {
-                        /* this allows labels to be indexed */
-                        tuple_add_member_label(qd.input_data, /* the tuple itself */
-                                qd.member_data,    /* the tuple member to be added to */
-                                mlabel /* the label to be added */);
-                    }
-                    if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
-                        tuple_add_member_label(
-                            qd.input_data, /* the tuple itself */
-                            qd.member_data,    /* the tuple member to be added to */
-                            matched_label/* the label to be added */);
-
-                }
-            }
-            }
-            if(qd.is_last) {
-                if (got_match && matched_label) { /* this is the -L option label */
-                    wsdata_add_label(qd.input_data,matched_label);
-                }
-                if(got_match || pass_all || do_tag[type_index]) {
-                    ws_set_outdata(qd.input_data, outtype_tuple, dout);
-                  ++outcnt;
-                }
-                reset_counts();
-                wsdata_delete(qd.input_data);
-                got_match = false;
-            }
-            cb_queue.front()->pop_front();
-        }
-    }
-    return found ? 1 : 0;
+    return process_common(input_data,dout,type_index);
 }
 
 /*-----------------------------------------------------------------------------
@@ -1122,26 +1077,41 @@ int vectormatch_proc::add_element(void * type_table,
 {
     /* push everything into a vector element */
     auto newlab = labelstr ? wsregister_label(type_table, labelstr)
-                : restr ? wsregister_label(type_table,restr)
                 : nullptr;
-//    auto match_id = term_vector.size();
-    term_vector.emplace_back();
-    term_vector.back().pattern = std::string { restr ? restr : ""};
-    term_vector.back().binfile = std::string { binstr ? binstr : ""};
-    term_vector.back().matchlen = matchlen;
-    term_vector.back().pid = term_vector.size();
-    term_vector.back().label = newlab;
+    auto it = term_groups.find(newlab);
+    if(it == term_groups.end()) {
+        std::tie(it,std::ignore) = term_groups.emplace(newlab, pattern_group{ newlab } );
+    }
+    auto &grp = it->second;
+//    term_vector.emplace_back();
+    auto bindata = std::string{};
+    if(binstr) {
+        try {
+            std::ifstream ifs(binstr, std::ios_base::in|std::ios_base::binary);
+            bindata = std::string{std::istreambuf_iterator<char>(ifs),
+                                  std::istreambuf_iterator<char>{}};
+        } catch(...) {
+        }
+    }
+    grp.emplace_back(restr ? std::string { restr } : std::string{},
+                     bindata);
+
+//    term_vector.back().pattern = restr ? std::string { restr } : std::string{};
+//    term_vector.back().binfile = binstr ? std::string { binstr } : std::string{};
+//    term_vector.back().matchlen = matchlen;
+//    term_vector.back().label = newlab;
 
     return 1;
 }
-
 
 /*-----------------------------------------------------------------------------
  * process_hex_string
  *  Lifted straight out of label_match.c
  *
  *---------------------------------------------------------------------------*/
-static int process_hex_string(char * matchstr, int matchlen) {
+namespace {
+int process_hex_string(char * matchstr, int matchlen)
+{
     int i;
     char matchscratchpad[1500];
     int soffset = 0;
@@ -1149,22 +1119,18 @@ static int process_hex_string(char * matchstr, int matchlen) {
     for (i = 0; i < matchlen; i++) {
        if (isxdigit(matchstr[i])) {
           if (isxdigit(matchstr[i + 1])) {
-             matchscratchpad[soffset] = (char)strtol(matchstr + i,
-                                        NULL, 16);
+             matchscratchpad[soffset] = (char)strtol(matchstr + i,nullptr, 16);
              soffset++;
              i++;
           }
        }
     }
-
     if (soffset) {
        //overwrite hex-decoded string on top of original string..
        memcpy(matchstr,matchscratchpad, soffset);
     }
-
     return soffset;
 }
-namespace {
 const char* find_escaped (const char *ptr,const char *pend, char val)
 {
     if(!ptr)
@@ -1183,6 +1149,26 @@ const char* find_escaped (const char *ptr,const char *pend, char val)
     }
     return pend;
 };
+const char *skip_ws(const char *ptr, const char *pend = nullptr)
+{
+    if(ptr) {
+        if(pend) {
+            while(ptr != pend ){
+                auto c = *ptr;
+                if(c != ' ' && c != '\t')
+                    return ptr;
+                ++ptr;
+            }
+        }else{
+            while(auto c = *ptr) {
+                if(c != ' ' && c != '\t')
+                    return ptr;
+                ++ptr;
+            }
+        }
+    }
+    return nullptr;
+}
 }
 /*-----------------------------------------------------------------------------
  * vectormatch_loadfile
@@ -1191,59 +1177,93 @@ const char* find_escaped (const char *ptr,const char *pend, char val)
  *---------------------------------------------------------------------------*/
 int vectormatch_proc::loadfile(void* type_table,const char * thefile)
 {
-    FILE * fp;
-    char line [2001];
-    int linelen;
-    char * linep = nullptr;
-    char * datap = nullptr;
-    char * matchstr = nullptr;
-    int    matchlen;
-    char * binstr = nullptr;
-    char * endofstring = nullptr;
-    char * match_label = nullptr;
+    char line [4096]    = { 0,};
+    std::FILE * fp      = nullptr;
+    auto linelen        = 0;
+    char * linep        = nullptr;
+    char * lendp        = nullptr;
+    char * matchstr     = nullptr;
+    auto   matchlen     = 0;
+    char * binstr       = nullptr;
+    char * endofstring  = nullptr;
+    char * match_label  = nullptr;
 
-    if ((fp = sysutil_config_fopen(thefile,"r")) == NULL) {
+    if (!(fp = sysutil_config_fopen(thefile,"r"))) {
         fprintf(stderr,
             "Error: Could not open vectormatches file %s:\n %s\n",
             thefile, strerror(errno));
         return 0;
     }
 
-    while (fgets(line, 2000, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         //strip return
-        linelen = strlen(line);
-        if (line[linelen - 1] == '\n') {
-            line[linelen - 1] = '\0';
-            linelen--;
+        linep = (char*)skip_ws(line);
+        if(!linep)
+            continue;
+        linelen = strlen(linep);
+        if(!linelen)
+            continue;
+        lendp = linep + linelen;
+        if(*(lendp-1) == '\n') {
+            --lendp;
+            *lendp = '\0';
+            linelen = lendp - linep;
         }
-
-        if ((linelen <= 0) || (line[0] == '#'))
+        if (linelen <= 0)
             continue;
-        datap = line + linelen;
-        linep = line;
-        matchstr = NULL;
-        match_label = NULL;
+
+        if(*linep == '#') {
+            linep = (char*)skip_ws(linep+1);
+            if(!linep)
+                continue;
+            std::string words[] = { "pragma", "LRL", "threshold" };
+            for(auto &&word : words) {
+                if(strncmp(linep, word.c_str(), word.size()))
+                    continue;
+                if(!(linep = (char*)skip_ws(linep + word.size())))
+                    continue;
+            }
+            match_label = (char *) index(linep,'(');
+            endofstring = (char *) index(linep,')');
+//            endofstring = match_label ? (char *) find_escaped(match_label,nullptr, ')') : nullptr;
+            if (match_label && endofstring && (match_label < endofstring)) {
+                match_label++;
+                *endofstring = '\0';
+            }else{
+                continue;
+            }
+            linep = endofstring + 1;
+            auto threshold = 0;
+            std::istringstream{std::string{linep}} >> threshold;
+            auto newlab = wsregister_label(type_table, match_label);
+            auto it = term_groups.find(newlab);
+            if(it == term_groups.end()) {
+                std::tie(it,std::ignore) = term_groups.emplace( newlab, pattern_group{ newlab });
+            }
+            it->second.threshold = threshold;
+            continue;
+        }
+        matchstr = nullptr;
+        match_label = nullptr;
         // read line - exact seq
-        if (linep[0] == '"') {
+        if (*linep == '"') {
             endofstring = (char*)find_escaped(linep + 1,nullptr,'"');
-//            linep++;
-//            endofstring = (char *)rindex(linep, '"');
-            if (endofstring == NULL)
-            continue;
+            if (!endofstring)
+                continue;
 
-            endofstring[0] = '\0';
+            *endofstring = '\0';
             matchstr = linep + 1;
-            matchlen = strlen(matchstr);
+            matchlen = endofstring - matchstr;
             //sysutil_decode_hex_escapes(matchstr, &matchlen);
             linep = endofstring + 1;
-        } else if (linep[0] == '{') {
+        } else if (*linep == '{') {
             linep++;
             endofstring = (char *)index(linep, '}');
-            if (endofstring == NULL)
+            if (!endofstring)
                 continue;
-            endofstring[0] = '\0';
+            *endofstring = '\0';
             matchstr = linep;
-            matchlen = process_hex_string(matchstr, strlen(matchstr));
+            matchlen = process_hex_string(matchstr, endofstring-matchstr);
             if (!matchlen)
                 continue;
 
@@ -1251,17 +1271,15 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
         } else {
             continue;
         }
-
         // Get the corresonding label
         if (matchstr) {
             //find (PROTO)
             match_label = (char *) index(linep,'(');
             endofstring = (char *) index(linep,')');
 //            endofstring = match_label ? (char *) find_escaped(match_label,nullptr, ')') : nullptr;
-
             if (match_label && endofstring && (match_label < endofstring)) {
                 match_label++;
-                endofstring[0] = '\0';
+                *endofstring = '\0';
             } else {
                 fprintf(stderr,
                     "Error: no label corresponding to match string '%s'\n",
@@ -1272,9 +1290,9 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
             linep = endofstring + 1;
         }
         if (match_label) {
-            binstr = std::find_if(linep,datap, [](char x){return x != ' ' && x != '\t';});
-            if(binstr && binstr!= datap) {
-                if(*binstr== '"') {
+            binstr = (char*)skip_ws(linep,lendp);
+            if(binstr && binstr!= lendp) {
+                if(*binstr == '"') {
                     ++binstr;
                     auto bin_end = (char*)find_escaped(binstr ,nullptr,'"');
                     if(!bin_end) {
@@ -1293,23 +1311,17 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
                 }
             }
         }
+        if (!add_element(type_table, matchstr, binstr, matchlen,match_label)) {
+            sysutil_config_fclose(fp);
+            return 0;
+        }
         if(!binstr) {
-            if (!add_element(type_table, matchstr, nullptr, matchlen,match_label)) {
-                sysutil_config_fclose(fp);
-                return 0;
-            }
             dprint("Adding entry for string '%s' label '%s'",
                 matchstr, match_label);
         } else {
-            auto binloc = std::string{binstr};
-            if (!add_element(type_table, matchstr, binloc.c_str(), matchlen,match_label)) {
-                sysutil_config_fclose(fp);
-                return 0;
-            }
             dprint("Adding entry for file '%s' string '%s' label '%s'",
-                binloc.c_str(), matchstr, match_label);
+                binstr, matchstr, match_label);
         }
-
     }
     sysutil_config_fclose(fp);
     return 1;
