@@ -219,14 +219,14 @@ struct pattern_group {
     std::vector<std::string> patterns{};
     std::vector<std::string> binaries{};
     wslabel_t               *label{};
-    int                      threshold{1};
+    int                      threshold{0};
     int                      pid{-1};
     pattern_group() = default;
     pattern_group(const pattern_group & ) = default;
     pattern_group(pattern_group && ) = default;
     pattern_group&operator=(const pattern_group & ) = default;
     pattern_group&operator=(pattern_group && ) = default;
-    pattern_group(wslabel_t *l, int t = 1, int p = -1)
+    pattern_group(wslabel_t *l, int t = 0, int p = -1)
     : label{l}, threshold{t}, pid{p}{}
 
     size_t size() const { return patterns.size();}
@@ -242,7 +242,6 @@ struct pattern_group {
     {
         return {patterns.at(idx),binaries.at(idx)};
     }
-
     void emplace_back(const std::string &pat, const std::string &bin)
     {
         patterns.emplace_back(pat);
@@ -554,7 +553,7 @@ int vectormatch_proc::cmd_options(
     npu_log_set_level(driver,(NPULogLevel)((int)NPU_WARN));
     for(auto & gpair: term_groups) {
         auto & grp = gpair.second;
-        if(grp.size() > 1) {
+        if(grp.size() > 1 && grp.threshold > 0) {
             auto gexpr = std::vector<const char*>{};
             auto gbins = std::vector<const void *>{};
             auto gelen = std::vector<size_t>{};
@@ -589,21 +588,25 @@ int vectormatch_proc::cmd_options(
                 tool_print("\t%s",e);
             }
         }else{
-            auto vals = grp.at(0);
-            auto pattern_id = npu_pattern_insert_pcre(
-                driver
-                , vals.first.c_str()
-                , vals.first.size()
-                , ""
-                );
-            if(pattern_id < 0) {
-                error_print("failed to insert pattern '%s'", vals.first.c_str());
-                continue;
+            for(auto i = 0ul; i < grp.size(); ++i) {
+                auto vals = grp.at(i);
+                auto pattern_id = npu_pattern_insert_pcre(
+                    driver
+                    , vals.first.c_str()
+                    , vals.first.size()
+                    , ""
+                    );
+                if(pattern_id < 0) {
+                    error_print("failed to insert pattern '%s'", vals.first.c_str());
+                    continue;
+                }
+                if(grp.pid < 0)
+                    grp.pid = pattern_id;
+//                grp.pid = pattern_id;
+                term_map.emplace(pattern_id, std::ref(grp));
+                tool_print("Loaded string '%s' label '%s' -> %d",
+                    vals.first.c_str(), grp.label->name, pattern_id);
             }
-            grp.pid = pattern_id;
-            term_map.emplace(pattern_id, std::ref(grp));
-            tool_print("Loaded string '%s' label '%s' -> %d",
-                vals.first.c_str(), grp.label->name, pattern_id);
         }
 /*        if(!term.binfile.empty()) {
             auto pattern_id = npu_pattern_insert_binary_file(
@@ -1217,12 +1220,19 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
             if(!linep)
                 continue;
             std::string words[] = { "pragma", "LRL", "threshold" };
+            auto valid = true;
             for(auto &&word : words) {
-                if(strncmp(linep, word.c_str(), word.size()))
-                    continue;
-                if(!(linep = (char*)skip_ws(linep + word.size())))
-                    continue;
+                if(strncmp(linep, word.c_str(), word.size())) {
+                    valid = false;
+                    break;
+                }
+                if(!(linep = (char*)skip_ws(linep + word.size()))) {
+                    valid = false;
+                    break;
+                }
             }
+            if(!valid)
+                continue;
             match_label = (char *) index(linep,'(');
             endofstring = (char *) index(linep,')');
 //            endofstring = match_label ? (char *) find_escaped(match_label,nullptr, ')') : nullptr;
