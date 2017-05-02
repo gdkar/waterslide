@@ -108,9 +108,16 @@ extern "C" const char proc_description[] =
     "expression matching.\n"
     "vectormatchnpu uses LRL's NPU coprocessor. The format of the "
     "regular expressions are defined in re2/re2.h.\n"
+    "to make a group of expressions sharing a common label have "
+    "threshold behavior, use a '#pragma LRL threshold (<LABEL>) <VALUE>' "
+    "directive somewhere in the configuration file. (The position of "
+    "this directive relative to the expressions using the effected label "
+    "doesn't matter.)\n"
     "\n"
-    "\"select\" (SQL_SELECT)\n"
+    "#pragma LRL threshold (SQL_UNION) 1\n"
+    "\"select\" (SQL_SELECT) 'path/to/select_binary.npu'\n"
     "\"union\"      (SQL_UNION)\n"
+    "\"UNION\"      (SQL_UNION)\n"
     "\n";
 
 extern "C" const proc_example_t proc_examples[] = {
