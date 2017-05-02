@@ -590,6 +590,22 @@ int vectormatch_proc::cmd_options(
         }else{
             for(auto i = 0ul; i < grp.size(); ++i) {
                 auto vals = grp.at(i);
+                if(vals.second.size()) {
+                    auto pattern_id = npu_pattern_insert_binary(
+                        driver
+                        , vals.second.c_str()
+                        , vals.second.size()
+                        );
+                    if(pattern_id >= 0) {
+                        if(grp.pid < 0)
+                            grp.pid = pattern_id;
+        //                grp.pid = pattern_id;
+                        term_map.emplace(pattern_id, std::ref(grp));
+                        tool_print("Loaded string '%s' label '%s' -> %d",
+                            vals.first.c_str(), grp.label->name, pattern_id);
+                        continue;
+                    }
+                }
                 auto pattern_id = npu_pattern_insert_pcre(
                     driver
                     , vals.first.c_str()
