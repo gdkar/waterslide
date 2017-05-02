@@ -20,7 +20,7 @@ with open(sys.argv[1]) as _ifile:
                 print(expression)
                 label = m.group(2) or " (L{})".format(count)
                 binfile = ppath.join(odir,'{}-{}'.format(count,expression))
-                sb.check_call(['dc','-e',expression,'-o',binfile])
+                sb.check_call(['dc','-s','14','-e',expression,'-o',binfile])
                 _ofile.write('"{}"\t{} "{}"\n'.format(expression,label, binfile));
                 count += 1
             except Exception as e:

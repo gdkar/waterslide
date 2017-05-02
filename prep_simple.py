@@ -38,7 +38,7 @@ with ifile.open('rb') as _ifile:
                 print(expression)
                 label = " (L{})".format(count)
                 binfile = odir.joinpath( 'expression-{}.npup'.format(count))
-                retcode = sb.call(['dc','-e',expression,'-o',binfile.as_posix()])
+                retcode = sb.call(['dc','-s','-14','-e',expression,'-o',binfile.as_posix()])
                 if retcode < 0:
                     continue
                 _ofile.write('"{}"\t{} "{}"\n'.format(expression,label, binfile.as_posix()));
