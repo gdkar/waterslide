@@ -124,12 +124,12 @@ extern "C" const proc_example_t proc_examples[] = {
     {"...| vectormatchnpu -F \"re.txt\" -M MY_STRING |...\n",
     "apply the labels of the matched regular expressions in "
     "re.txt to the MY_STRING field."},
-    {"...| vectormatchnpu -F \"re.txt\" -L NPU_MATCH MY_STRING |...\n",
-    "apply the label NPU_MATCH to the MY_STRING field if there was a match."},
-    {"...| TAG:vectormatchnpu -F \"re.txt\" -L NPU_MATCH MY_STRING |...\n",
-    "pass all tuples, but tag the ones that had a match"},
-    {"...| vectormatchnpu -F \"re.txt\" |...\n",
-    "match against all strings in the tuple"},
+    {"...| vectormatchnpu -v -v -v -F \"re.txt\" -L NPU_MATCH MY_STRING |...\n",
+    "apply the label NPU_MATCH to the MY_STRING field if there was a match (with a bit of debug output)."},
+    {"...| TAG:vectormatchnpu -vvvvvvv -F \"re.txt\" -L NPU_MATCH MY_STRING |...\n",
+    "pass all tuples, but tag the ones that had a match, verbosely"},
+    {"...| vectormatchnpu -v '-4' -F \"re.txt\" |...\n",
+    "match against all strings in the tuple quietly"},
     {NULL,""}
 };
 
@@ -151,7 +151,11 @@ extern "C" const proc_option_t proc_opts[] = {
     {'m',"","matches",
     "configure the number of matches to return per status.",0,0},
     {'P',"","matches",
-    "pass all packets",0,0},
+    "pass all packets",1,0},
+    {'v',"","verbosity",
+    "modulate verbosity" },
+    {'q',"","quiet",
+    "modulate verbosity ( the oposite of 'v' )" },
 
     /*
      {'T',"","",
@@ -462,7 +466,7 @@ int vectormatch_proc::cmd_options(
     int F_opt = 0;
 //    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 
-    while ((op = getopt(argc, argv, "Pm:B:E:D:v::F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "Pm:B:E:D:q:v::F:L:M")) != EOF) {
         switch (op) {
           case 'v':{
                 if(optarg && *optarg == 'v') {
@@ -476,6 +480,19 @@ int vectormatch_proc::cmd_options(
                 }
                break;
             }
+          case 'q':{
+                if(optarg && *optarg == 'q') {
+                    while(*optarg++ == 'q') {
+                        --verbosity;
+                    }
+                }else if(optarg) {
+                    verbosity = -atoi(optarg);
+                }else{
+                    --verbosity;
+                }
+               break;
+            }
+
             case 'M':{  /* label tuple data members that match */
                 label_members = true;
                 break;
@@ -557,7 +574,7 @@ int vectormatch_proc::cmd_options(
           error_print("failed to open NPU hardware device");
           return 0;
      }
-    npu_log_set_level(driver,(NPULogLevel)((int)NPU_WARN));
+//    npu_log_set_level(driver,(NPULogLevel)((int)NPU_WARN));
     for(auto & gpair: term_groups) {
         auto & grp = gpair.second;
         if(grp.size() > 1 && grp.threshold > 0) {
@@ -672,7 +689,7 @@ int vectormatch_proc::cmd_options(
         }*/
      }
      npu_pattern_load(driver);
-     npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
+//     npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
      status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(driver));
      status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(driver),npu_pattern_capacity(driver));
      client = nullptr;
