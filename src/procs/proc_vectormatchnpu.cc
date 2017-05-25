@@ -498,19 +498,7 @@ int vectormatch_proc::cmd_options(
                     ++verbosity;
                 }
                break;
-            }
-          case 'q':{
-                if(optarg && *optarg == 'q') {
-                    while(*optarg++ == 'q') {
-                        --verbosity;
-                    }
-                }else if(optarg) {
-                    verbosity = -atoi(optarg);
-                }else{
-                    --verbosity;
-                }
-               break;
-            }
+          }
           case 'q':{
                 if(optarg && *optarg == 'q') {
                     while(*optarg++ == 'q') {
