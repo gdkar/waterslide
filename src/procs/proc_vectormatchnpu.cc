@@ -432,12 +432,11 @@ vectormatch_proc::~vectormatch_proc()
 
 static int vectormatch_npu_log_cb(void *, int level, const char *fmt, va_list args)
 {
-    auto ilevel = int(level);
     char msg[4096] = { 0, };
     vsnprintf(msg,sizeof(msg),fmt, args);
-    if(ilevel >= int(NPU_ERROR)) {
+    if(level >= int(NPU_ERROR)) {
         error_print("%s",msg);
-    }else if(ilevel >= int(NPU_VERBOSE)) {
+    }else if(level >= int(NPU_DEBUG)) {
         tool_print("%s",msg);
     }else{
         dprint("%s",msg);
@@ -469,14 +468,46 @@ int vectormatch_proc::cmd_options(
     while ((op = getopt(argc, argv, "Pm:B:E:D:q:v::F:L:M")) != EOF) {
         switch (op) {
           case 'v':{
-                if(optarg && *optarg == 'v') {
-                    while(*optarg++ == 'v') {
-                        ++verbosity;
+                auto tmparg = optarg;
+                auto endarg = tmparg;
+                auto tmpver = verbosity;
+                if(tmparg && *tmparg== 'v') {
+                    while(*tmparg++ == 'v')
+                        ++tmpver;
+                    if(!*tmparg) {
+                        verbosity = tmpver;
+                        break;
+                    }
+                }
+                if(optarg && *optarg) {
+                    errno = 0;
+                    tmpver = strtol(optarg, &endarg, 0);
+                    if(endarg != optarg) {
+                        verbosity = tmpver;
+                        break;
+                    }
+                }
+                if(optarg && *optarg) {
+                    tmpver = funny_car::npu_log_level_from_string(optarg);
+                    if(tmpver != int(NPU_ERROR)) {
+                        verbosity = int(NPU_INFO) - tmpver;
+                        break;
+                    }
+                }
+                {
+                    ++verbosity;
+                }
+               break;
+            }
+          case 'q':{
+                if(optarg && *optarg == 'q') {
+                    while(*optarg++ == 'q') {
+                        --verbosity;
                     }
                 }else if(optarg) {
-                    verbosity = atoi(optarg);
+                    verbosity = -atoi(optarg);
                 }else{
-                    ++verbosity;
+                    --verbosity;
                 }
                break;
             }
@@ -568,9 +599,9 @@ int vectormatch_proc::cmd_options(
     driver = npu_driver_alloc();
     if(!driver)
         return 0;
-    npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
+    npu_log_set_level(driver,NPULogLevel(int(NPU_INFO) - verbosity));
     npu_log_set_handler(driver,(void*)this, &vectormatch_npu_log_cb);
-    if(npu_driver_open(&driver,device_name.c_str()) < 0) {
+    if(npu_driver_open(&driver,device_name.c_str()) != 0) {
           error_print("failed to open NPU hardware device");
           return 0;
      }
@@ -690,15 +721,16 @@ int vectormatch_proc::cmd_options(
      }
      npu_pattern_load(driver);
 //     npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
+     npu_log_set_level(driver,(NPULogLevel)(int(NPU_INFO) - verbosity));
      status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(driver));
      status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(driver),npu_pattern_capacity(driver));
      client = nullptr;
-     if(npu_client_attach(&client,driver) < 0) {
+     if(npu_client_attach(&client,driver) != 0) {
           error_print("could not crete a client for holding reference to npuDriver");
           return 0;
      }
      npu_driver_set_matches(driver, status_size);
-     if(npu_thread_start(driver) < 0) {
+     if(npu_thread_start(driver) != 0) {
           error_print("could not start DPU thread");
           return 0;
      }
