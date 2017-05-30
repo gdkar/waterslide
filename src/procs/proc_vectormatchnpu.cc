@@ -229,6 +229,7 @@ struct callback_batch {
 struct pattern_group {
     std::vector<std::string> patterns{};
     std::vector<std::string> binaries{};
+    std::string              anchor{};
     wslabel_t               *label{};
     int                      threshold{0};
     int                      pid{-1};
@@ -609,15 +610,16 @@ int vectormatch_proc::cmd_options(
                 gbins.push_back(item.second.data());
                 gblen.push_back(item.second.size());
             }
-            auto pattern_id = npu_pattern_insert_group(
+            auto pattern_id = npu_pattern_insert_anchored_group(
                 driver
                 , gexpr.data()
                 , gelen.data()
                 , gbins.data()
                 , gblen.data()
                 , grp.size()
+                , grp.anchor.c_str()
+                , grp.anchor.size()
                 , grp.threshold
-                , false
                 , ""
                 );
             if(pattern_id < 0) {
@@ -1279,7 +1281,7 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
             linep = (char*)skip_ws(linep+1);
             if(!linep)
                 continue;
-            std::string words[] = { "pragma", "LRL", "threshold" };
+            std::string words[] = { "pragma", "LRL"};
             auto valid = true;
             for(auto &&word : words) {
                 if(strncmp(linep, word.c_str(), word.size())) {
@@ -1293,25 +1295,85 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
             }
             if(!valid)
                 continue;
-            match_label = (char *) index(linep,'(');
-            endofstring = (char *) index(linep,')');
-//            endofstring = match_label ? (char *) find_escaped(match_label,nullptr, ')') : nullptr;
-            if (match_label && endofstring && (match_label < endofstring)) {
-                match_label++;
-                *endofstring = '\0';
-            }else{
-                continue;
+            {
+                auto word = std::string{"threshold"};
+                if(strncmp(linep,word.c_str(),word.size())) {
+                    if(!(linep = (char*)skip_ws(linep + word.size()))){
+                        continue;
+                    }
+                    match_label = (char *) index(linep,'(');
+                    endofstring = (char *) index(linep,')');
+                    if (match_label && endofstring && (match_label < endofstring)) {
+                        match_label++;
+                        *endofstring = '\0';
+                    }else{
+                        continue;
+                    }
+                    linep = endofstring + 1;
+                    auto threshold = 0;
+                    std::istringstream{std::string{linep}} >> threshold;
+                    auto newlab = wsregister_label(type_table, match_label);
+                    auto it = term_groups.find(newlab);
+                    if(it == term_groups.end()) {
+                        std::tie(it,std::ignore) = term_groups.emplace( newlab, pattern_group{ newlab });
+                    }
+                    it->second.threshold = threshold;
+                    continue;
+                }
             }
-            linep = endofstring + 1;
-            auto threshold = 0;
-            std::istringstream{std::string{linep}} >> threshold;
-            auto newlab = wsregister_label(type_table, match_label);
-            auto it = term_groups.find(newlab);
-            if(it == term_groups.end()) {
-                std::tie(it,std::ignore) = term_groups.emplace( newlab, pattern_group{ newlab });
+            {
+                auto word = std::string{"anchor"};
+                if(strncmp(linep,word.c_str(),word.size())) {
+                    if(!(linep = (char*)skip_ws(linep + word.size()))){
+                        continue;
+                    }
+                    match_label = (char *) index(linep,'(');
+                    endofstring = (char *) index(linep,')');
+                    if (match_label && endofstring && (match_label < endofstring)) {
+                        match_label++;
+                        *endofstring = '\0';
+                    }else{
+                        continue;
+                    }
+                    linep = endofstring+1;
+                    if(!(linep = (char*)skip_ws(linep))){
+                        continue;
+                    }
+                    matchstr = nullptr;
+                    // read line - exact seq
+                    if (*linep == '"') {
+                        endofstring = (char*)find_escaped(linep + 1,nullptr,'"');
+                        if (!endofstring)
+                            continue;
+                        *endofstring = '\0';
+                        matchstr = linep + 1;
+                        matchlen = endofstring - matchstr;
+                        //sysutil_decode_hex_escapes(matchstr, &matchlen);
+                        linep = endofstring + 1;
+                    } else if (*linep == '{') {
+                        linep++;
+                        endofstring = (char *)index(linep, '}');
+                        if (!endofstring)
+                            continue;
+                        *endofstring = '\0';
+                        matchstr = linep;
+                        matchlen = process_hex_string(matchstr, endofstring-matchstr);
+                        if (!matchlen)
+                            continue;
+                        linep = endofstring + 1;
+                    } else {
+                        continue;
+                    }
+                    auto anchor = std::string{matchstr, size_t(matchlen)};
+                    auto newlab = wsregister_label(type_table, match_label);
+                    auto it = term_groups.find(newlab);
+                    if(it == term_groups.end()) {
+                        std::tie(it,std::ignore) = term_groups.emplace( newlab, pattern_group{ newlab });
+                    }
+                    it->second.anchor = anchor;
+                    continue;
+                }
             }
-            it->second.threshold = threshold;
-            continue;
         }
         matchstr = nullptr;
         match_label = nullptr;
