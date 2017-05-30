@@ -1297,7 +1297,7 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
                 continue;
             {
                 auto word = std::string{"threshold"};
-                if(strncmp(linep,word.c_str(),word.size())) {
+                if(!strncmp(linep,word.c_str(),word.size())) {
                     if(!(linep = (char*)skip_ws(linep + word.size()))){
                         continue;
                     }
@@ -1323,7 +1323,7 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
             }
             {
                 auto word = std::string{"anchor"};
-                if(strncmp(linep,word.c_str(),word.size())) {
+                if(!strncmp(linep,word.c_str(),word.size())) {
                     if(!(linep = (char*)skip_ws(linep + word.size()))){
                         continue;
                     }
