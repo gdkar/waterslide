@@ -19,19 +19,21 @@ wsproto_in= [_ for _ in args.target if _.endswith('.wsproto') or _.endswith('.mp
 with tempfile.NamedTemporaryFile() as script:
     script.write('%thread(1){')
     if pcap_in:
-        script.write('pcap_in -r ' + ' -r '.join(pcap_in) + ' -> $data_in\n')
+        script.write('pcap_in -r ' + ' -r '.join(pcap_in) + ' | bundle -N 256 -> $data_in\n')
     if wsproto_in:
-        script.write('wsproto_in -r ' + ' -r '.join(wsproto_in) + ' -> $data_in\n')
+        script.write('wsproto_in -r ' + ' -r '.join(wsproto_in) + ' | bundle -N 256 -> $data_in\n')
 
     if parallel:
         script .write( '}\n%thread(2){\n')
-    script .write( ' $data_in | {method} CONTENT -F {expr} -M -L RESULT -> $data_out\n'.format(method=args.method,expr = args.expr))
+    script .write( ' $data_in | flush -N -t 1 -> $flushing; \n' +
+                   ' $data_in | unbundle -> $unpacked; \n' +
+                   ' $unpacked , $flushing | {method} CONTENT -F {expr} -M -L RESULT | bundle -N 256 -> $data_out\n'.format(method=args.method,expr = args.expr))
     if parallel:
         script.write('}\n%thread(3){\n')
     script.write(
-        ' $data_out | labelstat -> $print_out\n' +
-        ' $data_out | bandwidth -> $print_out\n'
-        ' $print_out | print -VV\n' +
+        ' $data_out | unbundle -> $done\n' +
+        ' $done | labelstat -> $print_out\n' +
+        ' $done | bandwidth -> $print_out\n' +
         '}')
     script.flush()
     with open(script.name,'rb') as tmp:
