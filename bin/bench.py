@@ -8,7 +8,7 @@ group = parser.add_mutually_exclusive_group()
 group.add_argument("-p", "--parallel", action = 'store_false',default=True, help='use waterslide-parallel.')
 group.add_argument("-s", "--serial", action = 'store_true',default=False, help='use waterslide.')
 parser.add_argument('-m','--method',action='store',choices=['npu2','vnpu','vectornpu','vectormatchnpu','vectormatchre2','vectorre2'], default='vectormatchnpu')
-parser.add_argument('-e','--expr',action='store',default='../bench_regexes.list')
+parser.add_argument('-e','--expr',action='store',default='../bench_regexes.preproc/bench_regexes')
 parser.add_argument('-t','--target',nargs='+',default=['../npu2_bench/packets.cut.wsproto','../npu2_bench/packest.cut_pt001.wsproto'])
 
 args = parser.parse_args()
@@ -36,8 +36,8 @@ with tempfile.NamedTemporaryFile() as script:
         ' $done | bandwidth -> $print_out\n' +
         '}')
     script.flush()
-    with open(script.name,'rb') as tmp:
-        print(tmp.read())
+#    with open(script.name,'rb') as tmp:
+#        print(tmp.read())
     is_npu = args.method.endswith('npu')
     fmt_string = 'r:{}' if is_npu else 'l:{}'
     def ws_run():

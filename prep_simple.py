@@ -32,14 +32,14 @@ count = 0
 expr = re.compile('"(.*)"(\\s*\\(.*?\\))?')
 with ifile.open('rb') as _ifile:
     with ofile.open('wb') as _ofile:
-        for expression in _ifile:
+        for n,expression in enumerate(_ifile):
             try:
                 expression = expression[:-1]
-                print(expression)
                 label = " (L{})".format(count)
                 binfile = odir.joinpath( 'expression-{}.npup'.format(count))
-                retcode = sb.call(['dc','-s','-14','-e',expression,'-o',binfile.as_posix()])
-                if retcode < 0:
+                retcode = sb.call(['dc','-qqqqqqqq','-s','16','-e',expression,'-o',binfile.as_posix()])
+                if not binfile.exists():
+                    print('FAILURE: {} "{}" returned {}'.format(n, expression, retcode))
                     continue
                 _ofile.write('"{}"\t{} "{}"\n'.format(expression,label, binfile.as_posix()));
                 count += 1
