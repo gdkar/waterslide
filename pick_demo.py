@@ -34,6 +34,7 @@ def pick(root, limit = 4255):
     with root.open('rb') as _ifile:
         lines = [_.strip() for _ in _ifile.readlines()]
     random.shuffle(lines)
+    lines = sorted(lines,key=lambda x:len(shlex.split(x)[0]))
     for line in lines:
         try:
             parts = shlex.split(line)

@@ -193,10 +193,11 @@ struct flow_data_t {
 };
 
 struct callback_data {
+    static constexpr const int capacity = 16ul;
     wsdata_t         *input_data{nullptr};
     wsdata_t         *member_data{nullptr};
+    int               type_index{0};
     int               nmatches{0};
-    static constexpr const int capacity = 16ul;
     int               matches[capacity];
     bool              is_last{false};
     bool              hw_overflow{false};
@@ -212,13 +213,16 @@ struct callback_data {
 };
 
 struct callback_batch {
+    static constexpr const size_t capacity = 63ul;
     ptrdiff_t       rptr{0};
     ptrdiff_t       wptr{0};
-    static constexpr const size_t capacity = 63ul;
     callback_data   data[capacity];
 
     callback_data&front() { return data[rptr];}
     callback_data&back()  { return data[wptr-1];}
+    const callback_data&front() const { return data[rptr];}
+    const callback_data&back() const { return data[wptr-1];}
+
     void emplace_back()   { wptr++;back().reset();}
     void pop_back()   { --wptr; }
     void pop_front()      { if(front().is_done.load()) rptr++; }
@@ -334,6 +338,7 @@ struct vectormatch_proc {
     int  status_size{1};
     bool label_members{}; /* 1 if we should labels matched members*/
     bool pass_all{false}; /* 1 if we should labels matched members*/
+    bool single_stream{false};
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
    ~vectormatch_proc();
@@ -366,7 +371,7 @@ struct vectormatch_proc {
 };
 vectormatch_proc::~vectormatch_proc()
 {
-    npu_client_flush(client);
+
     npu_client_free(&client);
     npu_thread_stop(driver);
     npu_driver_close(&driver);
@@ -466,8 +471,12 @@ int vectormatch_proc::cmd_options(
     int F_opt = 0;
 //    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 
-    while ((op = getopt(argc, argv, "Pm:B:E:D:q:v::F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "SPm:B:E:D:q:v::F:L:M")) != EOF) {
         switch (op) {
+          case 'S':{
+                single_stream = true;
+                break;
+          }
           case 'v':{
                 auto tmparg = optarg;
                 auto endarg = tmparg;
@@ -874,6 +883,21 @@ static void cleanup_cb(void *opaque)
 }
 int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
+    if(single_stream) {
+        if(cb_queue.empty() || cb_queue.back()->full()) {
+            cb_queue.emplace_back(new callback_batch());
+        }
+        cb_queue.back()->emplace_back();
+        auto &qd = cb_queue.back()->back();
+        qd.input_data = nullptr;
+        qd.member_data = nullptr;
+        qd.is_last = true;
+
+        auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
+        if(err < 0)
+            qd.is_done.store(true);
+        npu_client_end_packet(client);
+    }
     npu_client_flush(client);
     if(dtype_is_exit_flush(input_data)) {
         npu_client_free(&client);
@@ -883,7 +907,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
 }
 int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
-    auto found = 0;
+    auto found = false;
     while(!cb_queue.empty()) {
         if(cb_queue.front()->empty())
             cb_queue.pop_front();
@@ -891,7 +915,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
             auto &qd = cb_queue.front()->front();
             if(!qd.is_done.load())
                 break;
-            found += qd.nmatches;
+            found = found || qd.nmatches;
             if(qd.nmatches && !got_match) {
                 hits++;
                 got_match = true;
@@ -929,7 +953,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
                 if (got_match && matched_label) { /* this is the -L option label */
                     wsdata_add_label(qd.input_data,matched_label);
                 }
-                if(got_match || pass_all || do_tag[type_index]) {
+                if(got_match || pass_all || do_tag[qd.type_index]) {
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
@@ -939,7 +963,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
             cb_queue.front()->pop_front();
         }
     }
-    return found ? 1 : 0;
+    return found;
 }
 int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
@@ -976,6 +1000,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                     auto &qd = cb_queue.back()->back();
                     qd.input_data = input_data;
                     qd.member_data= member;
+                    qd.type_index = type_index;
                     qd.is_last     = (++nsub == nbin);
                     auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
                     if(err < 0) {
@@ -1006,7 +1031,10 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                         }
                         dbeg = dnxt;
                     }
-                    npu_client_end_packet(client);
+                    if(single_stream)
+                        npu_client_pause_packet(client);
+                    else
+                        npu_client_end_packet(client);
                 }
             }
         }
@@ -1065,6 +1093,7 @@ int vectormatch_proc::process_allstr(
             auto &qd = cb_queue.back()->back();
             qd.input_data = input_data;
             qd.member_data= member;
+            qd.type_index = type_index;
             qd.is_last     = (++nsub == nbin);
             submitted = true;
             auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
@@ -1096,8 +1125,11 @@ int vectormatch_proc::process_allstr(
                 }
                 dbeg = dnxt;
             }
-            npu_client_end_packet(client);
-        }
+            if(single_stream)
+                npu_client_pause_packet(client);
+            else
+                npu_client_end_packet(client);
+            }
     }
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
