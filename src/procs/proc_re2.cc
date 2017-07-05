@@ -211,7 +211,7 @@ int procbuffer_decode(void * vproc, wsdata_t * tdata, wsdata_t * dep,
                          bin->buf = (char *)proc->res_str[i]->data();
                          bin->len = proc->res_str[i]->length();
                     }
-                    proc->res_str[i]->clear();
+                    proc->res_str[i]->set(nullptr);//->clear();
                }
           }
           return 1;

@@ -32,7 +32,7 @@ endif
 ifndef NORE2
   RE2DIR = $(WS_LIB_DIR)/re2
   RE2BUILD = $(WS_BUILDROOT)/pkg/re2temp
-  RE2PKG = re2-20140304.tgz
+  RE2PKG = re2-20170601.tgz
   RE2INCLUDE = $(RE2DIR)/include
   RE2LIB = $(RE2DIR)/lib
 endif
