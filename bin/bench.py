@@ -19,6 +19,8 @@ if parallel and args.offset is not None:
     ws_exec += ['-W', '-T', '{}'.format(args.offset)]
 pcap_in= [_ for _ in args.target if _.endswith('.pcap')]#pathlib.fnmatch.fnmatch(_, '**/*.pcap')]
 wsproto_in= [_ for _ in args.target if _.endswith('.wsproto') or _.endswith('.mpproto')]#$pathlib.fnmatch.fnmatch(_, '**/*.{wsproto,mpproto}')]
+if 'npu' in args.method:
+    args.method += ' -m3 '
 with tempfile.NamedTemporaryFile() as script:
     script.write('%thread(0){')
     if pcap_in:
@@ -32,11 +34,12 @@ with tempfile.NamedTemporaryFile() as script:
                    ' $data_in | unbundle -> $unpacked; \n' +
                    ' $unpacked , $flushing | {method} CONTENT -F {expr} -M -L RESULT | bundle -N 256 -> $data_out\n'.format(method=args.method,expr = args.expr))
     if parallel:
-        script.write('}\n%thread(0){\n')
+        script.write('}\n%thread(4){\n')
     script.write(
         ' $data_out | unbundle -> $done\n' +
         ' $done | labelstat -> $print_out\n' +
         ' $done | bandwidth -> $print_out\n' +
+        ' $print_out | print  -VVT -A /dev/null\n' +
 #        ' $print_out | print\n' +
         '}')
     script.flush()
