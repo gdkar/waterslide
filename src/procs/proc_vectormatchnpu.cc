@@ -93,7 +93,7 @@ int proc_destroy(
  *---------------------------------------------------------------------------*/
 
 extern "C" const char proc_name[]        = PROC_NAME;
-extern "C" const char proc_version[]     = "0.1.4";
+extern "C" const char proc_version[]     = "0.1.5";
 extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
@@ -235,7 +235,9 @@ struct pattern_group {
     std::vector<std::string> binaries{};
     std::string              anchor{};
     wslabel_t               *label{};
+    wslabel_t               *label_div{};
     int                      threshold{0};
+    int                      divisor  {0};
     int                      pid{-1};
     pattern_group() = default;
     pattern_group(const pattern_group & ) = default;
@@ -263,15 +265,6 @@ struct pattern_group {
         patterns.emplace_back(pat);
         binaries.emplace_back(bin);
     }
-};
-struct vector_element
-{
-    std::string pattern;
-    std::string binfile;
-    wslabel_t *label{};      /* the label associated with the vector element */
-    size_t matchlen{};
-    int    threshold{0};
-    int    pid{-1};
 };
 namespace {
 template<class It>
@@ -323,8 +316,6 @@ struct vectormatch_proc {
 
     std::map<wslabel_t *, pattern_group> term_groups{};
     std::multimap<int, pattern_group&>   term_map   {};
-//    std::vector<vector_element> term_vector{};
-//    std::multimap<int, vector_element&> term_map{};
 
     std::deque<
         std::unique_ptr<
@@ -619,27 +610,53 @@ int vectormatch_proc::cmd_options(
                 gbins.push_back(item.second.data());
                 gblen.push_back(item.second.size());
             }
-            auto pattern_id = npu_pattern_insert_anchored_group(
-                driver
-                , gexpr.data()
-                , gelen.data()
-                , gbins.data()
-                , gblen.data()
-                , grp.size()
-                , grp.anchor.c_str()
-                , grp.anchor.size()
-                , grp.threshold
-                , ""
-                );
-            if(pattern_id < 0) {
-                error_print("failed to insert pattern group '%s', %zu patterns, threshold %d", gpair.first->name,grp.size(),grp.threshold);
+            if(grp.divisor > 1) {
+                auto pattern_id = npu_pattern_insert_rate_limited_group(
+                    driver
+                    , gexpr.data()
+                    , gelen.data()
+                    , grp.size()
+                    , grp.threshold
+                    , grp.divisor
+                    , ""
+                    );
+                if(pattern_id < 0) {
+                    error_print("failed to insert pattern group '%s', %zu patterns, threshold %d, divisor %d", gpair.first->name,grp.size(),grp.threshold, grp.divisor);
+                    continue;
+                }
+                grp.pid = pattern_id;
+                term_map.emplace(pattern_id, std::ref(grp));
+                term_map.emplace(pattern_id + 1, std::ref(grp));
+                tool_print("Loaded group '%s', div name '%s'  threshold %d, divisor %d, containing:",gpair.first->name,grp.label_div->name,grp.threshold, grp.divisor);
+                for(auto && e : gexpr) {
+                    tool_print("\t%s",e);
+                }
                 continue;
-            }
-            grp.pid = pattern_id;
-            term_map.emplace(pattern_id, std::ref(grp));
-            tool_print("Loaded group '%s', threshold %d, containing:",gpair.first->name,grp.threshold);
-            for(auto && e : gexpr) {
-                tool_print("\t%s",e);
+
+            }else{
+                auto pattern_id = npu_pattern_insert_anchored_group(
+                    driver
+                    , gexpr.data()
+                    , gelen.data()
+                    , gbins.data()
+                    , gblen.data()
+                    , grp.size()
+                    , grp.anchor.c_str()
+                    , grp.anchor.size()
+                    , grp.threshold
+                    , ""
+                    );
+                if(pattern_id < 0) {
+                    error_print("failed to insert pattern group '%s', %zu patterns, threshold %d", gpair.first->name,grp.size(),grp.threshold);
+                    continue;
+                }
+                grp.pid = pattern_id;
+                term_map.emplace(pattern_id, std::ref(grp));
+                tool_print("Loaded group '%s', threshold %d, containing:",gpair.first->name,grp.threshold);
+                for(auto && e : gexpr) {
+                    tool_print("\t%s",e);
+                }
+                continue;
             }
         }else{
             for(auto i = 0ul; i < grp.size(); ++i) {
@@ -934,7 +951,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
                 if (qd.member_data && label_members) {
                     /*get the label associated with the number returned by Aho-Corasick;
                     * default to label_match if one is not found. */
-                    auto mlabel = term.second.label;
+                    auto mlabel = (mval == term.second.pid) ? term.second.label : term.second.label_div;
                     if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
                         /* this allows labels to be indexed */
                         tuple_add_member_label(qd.input_data, /* the tuple itself */
@@ -957,7 +974,8 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
                     ws_set_outdata(qd.input_data, outtype_tuple, dout);
                   ++outcnt;
                 }
-                wsdata_delete(qd.input_data);
+                if(qd.input_data)
+                    wsdata_delete(qd.input_data);
                 got_match = false;
             }
             cb_queue.front()->pop_front();
@@ -1350,6 +1368,46 @@ int vectormatch_proc::loadfile(void* type_table,const char * thefile)
                         std::tie(it,std::ignore) = term_groups.emplace( newlab, pattern_group{ newlab });
                     }
                     it->second.threshold = threshold;
+                    continue;
+                }
+            }
+            {
+                auto word = std::string{"divisor"};
+                if(!strncmp(linep,word.c_str(),word.size())) {
+                    if(!(linep = (char*)skip_ws(linep + word.size()))){
+                        continue;
+                    }
+                    match_label = (char *) index(linep,'(');
+                    endofstring = (char *) index(linep,')');
+                    if (match_label && endofstring && (match_label < endofstring)) {
+                        match_label++;
+                        *endofstring = '\0';
+                    }else{
+                        continue;
+                    }
+                    linep = endofstring + 1;
+                    auto limit_label = (char *) index(linep,'(');
+                    endofstring = (char *) index(linep,')');
+                    if (limit_label && endofstring && (limit_label < endofstring)) {
+                        limit_label++;
+                        *endofstring = '\0';
+                    }else{
+                        continue;
+                    }
+                    linep = endofstring + 1;
+                    auto divisor = 0;
+                    std::istringstream{std::string{linep}} >> divisor;
+
+                    tool_print("adding limiting for %s, div label %s, divisor %d",match_label,limit_label,divisor);
+                    auto newlab = wsregister_label(type_table, match_label);
+                    auto limlab = wsregister_label(type_table, limit_label);
+                    auto it = term_groups.find(newlab);
+                    if(it == term_groups.end()) {
+                        std::tie(it,std::ignore) = term_groups.emplace( newlab, pattern_group{ newlab });
+                    }
+                    it->second.divisor = divisor;
+                    it->second.label_div      = limlab ;
+                    it->second.threshold= std::max(1,it->second.threshold);
                     continue;
                 }
             }
