@@ -21,8 +21,9 @@ if parallel and args.offset is not None:
     ws_exec += ['-W', '-T', '{}'.format(args.offset)]
 pcap_in= args.multi * [_ for _ in args.target if _.endswith('.pcap')]#pathlib.fnmatch.fnmatch(_, '**/*.pcap')]
 wsproto_in= args.multi * [_ for _ in args.target if _.endswith('.wsproto') or _.endswith('.mpproto')]#$pathlib.fnmatch.fnmatch(_, '**/*.{wsproto,mpproto}')]
-if 'npu' in args.method:
-    args.method += ' -m3 '
+method = args.method
+if 'npu' in method:
+    method += ' -m3 '
 
 with tempfile.NamedTemporaryFile() as script:
     script.write('%thread(0){')
@@ -36,7 +37,7 @@ with tempfile.NamedTemporaryFile() as script:
         script .write( '}\n%thread(2){\n')
     script .write( ' $data_in | flush -N -t 16 -> $flushing; \n' +
                    ' $data_in | unbundle -> $unpacked; \n' +
-                   ' $unpacked , $flushing | {method} -F {expr} -M -L RESULT | bundle -N 1024 -> $data_out\n'.format(method=args.method,expr = args.expr))
+                   ' $unpacked , $flushing | {method} -F {expr} -M -L RESULT | bundle -N 1024 -> $data_out\n'.format(method=method,expr = args.expr))
     if parallel:
         script.write('}\n%thread(4){\n')
     script.write(
@@ -50,7 +51,10 @@ with tempfile.NamedTemporaryFile() as script:
 #    with open(script.name,'rb') as tmp:
 #        print(tmp.read())
     is_npu = args.method.endswith('npu')
-    fmt_string = 'r:{}' if is_npu else 'l:{}'
+    fmt_string = '{method},{expr},{{}}'.format(
+        method=args.method,
+        expr=args.expr
+        )
     def ws_run():
         start = time.time()
         retval = sb.call(ws_exec + ['-F',script.name])
