@@ -2,12 +2,19 @@
 
 import sys, subprocess as sb, re
 import posix, posixpath as ppath
-if len(sys.argv) < 2:
-    print("usage: {} <infile> [ <outfile> ]".format(sys.argv[0]))
-    sys.exit(-1)
+import argparse
 
-odir = sys.argv[2] if (len(sys.argv) > 2) else (sys.argv[1] + '.preproc')
-ofile = ppath.join(odir,sys.argv[1])
+parser = argparse.ArgumentParser('a ytility to precompile vectormatchnpu format config files for faster load')
+parser.add_argument('-i','--input',action='store',help='input config file')
+parser.add_argument('-o','--output',action='store',default=None,help='output directory')
+parser.add_argument('args',nargs=argparse.REMAINDER)
+
+args = parser.parse_args()
+
+odir = args.output or args.input + '.preproc'
+
+ofile = ppath.join(odir,ppath.basename(args.input))
+
 posix.mkdir(odir)
 count = 0
 expr = re.compile('"(.*)"(\\s*\\(.*?\\))?')
@@ -20,7 +27,7 @@ with open(sys.argv[1]) as _ifile:
                 print(expression)
                 label = m.group(2) or " (L{})".format(count)
                 binfile = ppath.join(odir,'{}-{}'.format(count,expression))
-                sb.check_call(['dc','-s','14','-e',expression,'-o',binfile])
+                sb.check_call(['dc','-s','16','-e',expression,'-o',binfile] + args.args)
                 _ofile.write('"{}"\t{} "{}"\n'.format(expression,label, binfile));
                 count += 1
             except Exception as e:
