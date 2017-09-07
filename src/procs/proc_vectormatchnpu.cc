@@ -652,7 +652,10 @@ int vectormatch_proc::cmd_options(
                 }
                 grp.pid = pattern_id;
                 term_map.emplace(pattern_id, std::ref(grp));
-                tool_print("Loaded group '%s', threshold %d, containing:",gpair.first->name,grp.threshold);
+                tool_print("Loaded group '%s', anchor '%s', threshold %d, containing:"
+                    ,gpair.first->name
+                    ,grp.anchor.c_str()
+                    ,grp.threshold);
                 for(auto && e : gexpr) {
                     tool_print("\t%s",e);
                 }
