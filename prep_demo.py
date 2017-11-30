@@ -1,7 +1,7 @@
 #! /usr/bin/env python2
 from __future__ import print_function
 
-import sys, subprocess32 as sb, re
+import sys, subprocess as sb, re
 import posix, posixpath as ppath
 import argparse,pathlib, resource, signal
 
