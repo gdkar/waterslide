@@ -8,7 +8,10 @@ parser = argparse.ArgumentParser('a ytility to precompile vectormatchnpu format 
 parser.add_argument('input',action='store',help='input config file')
 parser.add_argument('-o','--output',action='store',default=None,help='output directory')
 parser.add_argument('-a','--absolute',action='store_true',help='use absolute paths')
-parser.add_argument('--simple',action='store_true',help='use simple formating')
+group = parser.add_mutually_exclusive_group()
+group.add_argument('--simple',action='store_true',help='use simple formatting')
+group.add_argument('--format',action='store_true',help='only reformat simple -> vnpu')
+#parser.add_argument('--simple',action='store_true',help='use simple formating')
 parser.add_argument('args',nargs=argparse.REMAINDER)
 
 args = parser.parse_args()
@@ -38,6 +41,12 @@ with ifile.open('rb') as _ifile:
                 if args.simple:
                     expression = line[:-1]
                     label = " (L{})".format(count)
+                elif args.fmt:
+                    expression = line[:-1]
+                    label = " (L{})".format(count)
+                    _ofile.write('"{}"\t{}\n'.format(expression,label));
+                    count += 1
+                    continue
                 else:
                     m = expr.match(line)
                     expression = m.group(1).replace('/','\\x2f')
