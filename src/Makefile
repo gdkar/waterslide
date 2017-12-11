@@ -17,8 +17,8 @@ $(PBDIR):
 ifndef NORE2
 $(RE2DIR):
 	@echo "Building re2 library (takes a while)"
-	$(MKDIR) -p $(RE2BUILD)
-	$(TAR) xf $(WS_BUILDROOT)/pkg/$(RE2PKG) -C $(RE2BUILD) $(QUIETOUT)
+	$(MKDIR) -p $(RE2BUILD)/re2
+	$(TAR) xf $(WS_BUILDROOT)/pkg/$(RE2PKG) --strip-components=1 -C $(RE2BUILD)/re2 $(QUIETOUT)
 	$(MAKE) -C $(RE2BUILD)/re2 CXXFLAGS='$(OPT_LEVEL) -g -pthread -fPIC' prefix=$(RE2DIR) all install $(QUIETOUT)
 	$(RM) -r $(RE2BUILD)
 endif
