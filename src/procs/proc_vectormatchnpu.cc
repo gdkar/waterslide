@@ -424,7 +424,6 @@ vectormatch_proc::~vectormatch_proc()
     tool_print("hardware overflow cnt %" PRIu64, hw_overflow);
     tool_print("queue overflow cnt %" PRIu64, qd_overflow);
     tool_print("max status cnt %d" , max_status);
-
 }
 
 static int vectormatch_npu_log_cb(void *, int level, const char *fmt, va_list args)
@@ -829,8 +828,6 @@ proc_process_t vectormatch_proc::input_set(
     if (wslabel_match(type_table, port, "TAG"))
         do_tag[type_index] = true;
 
-    // RDS - eliminated the NFLOW_REC and the NPACKET types.
-    // TODO:  need to determine whether NPACKET is a type we want to support.
     if (wsdatatype_match(type_table, input_type, "TUPLE_TYPE")){
         if (!outtype_tuple)
             outtype_tuple = ws_add_outtype(olist, dtype_tuple, NULL);
@@ -846,7 +843,8 @@ proc_process_t vectormatch_proc::input_set(
     }
     return nullptr;  // not matching expected type
 }
-static void result_cb(void *opaque, const npu_result *res)
+namespace {
+void result_cb(void *opaque, const npu_result *res)
 {
     if(res->nmatches) {
         auto priv = static_cast<callback_data*>(opaque);
@@ -862,10 +860,11 @@ static void result_cb(void *opaque, const npu_result *res)
         priv->nmatches += res->nmatches;
     }
 }
-static void cleanup_cb(void *opaque)
+void cleanup_cb(void *opaque)
 {
     auto priv = static_cast<callback_data*>(opaque);
     priv->is_done.store(true);
+}
 }
 /*-----------------------------------------------------------------------------
  * proc_process_meta
@@ -948,37 +947,37 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
             for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
-                for(auto & term : eq_range) {
-
-                //i.e., is there a tuple member we are going to add to?
                 if (qd.member_data && label_members) {
-                    /*get the label associated with the number returned by Aho-Corasick;
-                    * default to label_match if one is not found. */
-                    auto mlabel = (mval == term.second.pid) ? term.second.label : term.second.label_div;
-                    if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
-                        /* this allows labels to be indexed */
-                        tuple_add_member_label(qd.input_data, /* the tuple itself */
+                    for(auto & term : eq_range) {
+                //i.e., is there a tuple member we are going to add to?
+                        /*get the label associated with the number returned by Aho-Corasick;
+                        * default to label_match if one is not found. */
+                        auto mlabel = (mval == term.second.pid) ? term.second.label : term.second.label_div;
+                        if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
+                            /* this allows labels to be indexed */
+                            tuple_add_member_label(qd.input_data, /* the tuple itself */
+                                    qd.member_data,    /* the tuple member to be added to */
+                                    mlabel /* the label to be added */);
+                        }
+                        if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
+                            tuple_add_member_label(
+                                qd.input_data, /* the tuple itself */
                                 qd.member_data,    /* the tuple member to be added to */
-                                mlabel /* the label to be added */);
-                    }
-                    if(matched_label && !wsdata_check_label(qd.member_data,matched_label))
-                        tuple_add_member_label(
-                            qd.input_data, /* the tuple itself */
-                            qd.member_data,    /* the tuple member to be added to */
-                            matched_label/* the label to be added */);
+                                matched_label/* the label to be added */);
                     }
                 }
             }
             if(qd.is_last ){
-                if (got_match && matched_label) { /* this is the -L option label */
-                    wsdata_add_label(qd.input_data,matched_label);
-                }
-                if(got_match || pass_all || do_tag[qd.type_index]) {
-                    ws_set_outdata(qd.input_data, outtype_tuple, dout);
-                  ++outcnt;
-                }
-                if(qd.input_data)
+                if(qd.input_data) {
+                    if (got_match && matched_label) { /* this is the -L option label */
+                        wsdata_add_label(qd.input_data,matched_label);
+                    }
+                    if(got_match || pass_all || do_tag[qd.type_index]) {
+                        ws_set_outdata(qd.input_data, outtype_tuple, dout);
+                        ++outcnt;
+                    }
                     wsdata_delete(qd.input_data);
+                }
                 got_match = false;
             }
             cb_queue.front()->pop_front();
@@ -1168,9 +1167,9 @@ int proc_destroy(void * vinstance)
 {
     auto proc = (vectormatch_proc*)vinstance;
 
-    tool_print("meta_proc cnt %" PRIu64, proc->meta_process_cnt);
-    tool_print("matched tuples cnt %" PRIu64, proc->hits);
-    tool_print("output cnt %" PRIu64, proc->outcnt);
+//    tool_print("meta_proc cnt %" PRIu64, proc->meta_process_cnt);
+//    tool_print("matched tuples cnt %" PRIu64, proc->hits);
+//    tool_print("output cnt %" PRIu64, proc->outcnt);
 
     delete proc;
     return 1;
@@ -1213,12 +1212,6 @@ int vectormatch_proc::add_element(void * type_table,
     }
     grp.emplace_back(restr ? std::string { restr } : std::string{},
                      bindata);
-
-//    term_vector.back().pattern = restr ? std::string { restr } : std::string{};
-//    term_vector.back().binfile = binstr ? std::string { binstr } : std::string{};
-//    term_vector.back().matchlen = matchlen;
-//    term_vector.back().label = newlab;
-
     return 1;
 }
 
