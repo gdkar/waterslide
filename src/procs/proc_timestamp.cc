@@ -52,8 +52,6 @@
 /*-----------------------------------------------------------------------------
  *                  D E F I N E S
  *---------------------------------------------------------------------------*/
-#define LOCAL_MAX_TYPES 25
-#define LOCAL_VECTOR_SIZE 2000
 
 /*-----------------------------------------------------------------------------
  *           D L S Y M   I N T E R F A C E
@@ -93,34 +91,28 @@ extern "C" const char *const proc_alias[]  = { "tstamp", "when", nullptr };
 extern "C" const char *const proc_tags[]     = { "time", "timestamp", "stats", nullptr };
 extern "C" const char proc_purpose[]     = "adds timestamps. that's 'bout it.";
 extern "C" const char *const proc_synopsis[] = {
-    "tstampnpu [-V <label>] -F <file> [-L <label>] [-W] <label of string member to match>"
+    "timestamp [ -N ] [ -I ] [ -L <label>]"
   , nullptr
     };
 extern "C" const char proc_description[] =
-    "tstampnpu extends tstamp to perform regular "
-    "expression matching.\n"
-    "tstampnpu uses LRL's NPU coprocessor. The format of the "
-    "regular expressions are defined in re2/re2.h.\n"
-    "to make a group of expressions sharing a common label have "
-    "threshold behavior, use a '#pragma LRL threshold (<LABEL>) <VALUE>' "
-    "directive somewhere in the configuration file. (The position of "
-    "this directive relative to the expressions using the effected label "
-    "doesn't matter.)\n"
-    "\n"
-    "#pragma LRL threshold (SQL_UNION) 1\n"
-    "\"select\" (SQL_SELECT) 'path/to/select_binary.npu'\n"
-    "\"union\"      (SQL_UNION)\n"
-    "\"UNION\"      (SQL_UNION)\n"
+    "timestamp does wall-clock timestamping."
     "\n";
 
 extern "C" const proc_example_t proc_examples[] = {
-    {"...| tstampnpu -F \"re.txt\" -M MY_STRING |...\n",
-    "apply the labels of the matched regular expressions in "
-    "re.txt to the MY_STRING field."},
+    {"...| timestamp -L TSTIME|...\n",
+    "add timestamp as a ts with label TSTIME"},
+    {"...| timestamp -N -I -L INTTIME|...\n",
+    "add timestamp as a int64 with nanosecond precision and label INTTIME"},
     {NULL,""}
 };
 
 extern "C" const proc_option_t proc_opts[] = {
+    {'L',"label","LABEL",
+     "label under which to add the timestamp.", 0, 0},
+    {'I',"integer","",
+     "add the timestamp as an integer.", 0, 0},
+    {'N',"nanoseconds","",
+     "use nanosecond precision.", 0, 0},
     //the following must be left as-is to signify the end of the array
     {' ',"","",
     "",0,0}
@@ -150,19 +142,6 @@ struct iter_range : std::tuple<It,It> {
     using iterator    = It;
     using super       = std::tuple<iterator,iterator>;
     using super::super;
-/*    std::tuple<It,It> m_d{};
-    usi
-    iter_range() = default;
-    iter_range(iter_range&&) noexcept = default;
-    iter_range(const iter_range&) = default;
-    iter_range&operator=(iter_range &&) noexcept = default;
-    iter_range&operator=(const iter_range &) = default;
-    iter_range(std::tuple<It,It> && args):m_d{args}{}
-    template<class... Args>
-    iter_range(Args && ...args)
-    : m_d(std::forward<Args>(args)...)
-    {}*/
-
     iterator begin() const { return std::get<0>(*this);}
     iterator end()   const { return std::get<1>(*this);}
 };
@@ -179,6 +158,8 @@ iter_range<It> make_iter_range( Tup && tup)
 struct tstamp_proc {
     uint64_t meta_process_cnt{};
     ws_outtype_t *  outtype_tuple{};
+    bool            as_integer{false};
+    bool            as_nanos  {false};
 //    wslabel_t * pattern_id_label{};   /* label affixed to the buffer that matches*/
     wslabel_t * tstamp_label{};   /* label affixed to the buffer that matches*/
    ~tstamp_proc();
@@ -223,11 +204,19 @@ int tstamp_proc::cmd_options(
 //    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
     tstamp_label = wsregister_label(type_table, "TSTAMP");
 
-    while ((op = getopt(argc, argv, "L:")) != EOF) {
+    while ((op = getopt(argc, argv, "L:IN")) != EOF) {
         switch (op) {
             case 'L':{  /* labels an entire tuple and  matching members. */
                 tool_print("Registering label '%s' for matching buffers.", optarg);
                 tstamp_label = wsregister_label(type_table, optarg);
+                break;
+            }
+            case 'I':{
+                as_integer = true;
+                break;
+            }
+            case 'N':{
+                as_nanos = true;
                 break;
             }
             default: {
@@ -335,10 +324,21 @@ proc_process_t tstamp_proc::input_set(
 int tstamp_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
     meta_process_cnt++;
-    auto tv = timeval{};
-    gettimeofday(&tv, nullptr);
-
-    tuple_member_create_ts(input_data,{ tv.tv_sec, tv.tv_usec},tstamp_label);
+    auto tsp = timespec{};
+    if(as_nanos) {
+        clock_gettime(CLOCK_REALTIME,&tsp);
+    } else {
+        auto tv = timeval{};
+        gettimeofday(&tv,nullptr);
+        tsp.tv_sec = tv.tv_sec;
+        tsp.tv_nsec = tv.tv_usec * 1000;
+    }
+    if(as_integer) {
+        uint64_t val = tsp.tv_sec * 1000000000L + tsp.tv_nsec;
+        tuple_member_create_uint64(input_data, (as_nanos ? val : (val/1000)), tstamp_label);
+    } else {
+        tuple_member_create_ts(input_data,{ tsp.tv_sec, tsp.tv_nsec/1000},tstamp_label);
+    }
     ws_set_outdata(input_data, outtype_tuple, dout);
     return 1;
 }
