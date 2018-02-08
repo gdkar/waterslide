@@ -13,7 +13,7 @@ parser.add_argument('-a','--absolute',action='store_true',help='use absolute pat
 parser.add_argument('-j','--jobs',action='store',type=int,default=24,help='number of concurrent jobs to leave outstanding')
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--simple',action='store_true',help='use simple formatting')
-group.add_argument('--fmt',action='store_true',help='only reformat simple -> vnpu')
+group.add_argument('-f','--fmt','--format',action='store_true',help='only reformat simple -> vnpu')
 #parser.add_argument('--simple',action='store_true',help='use simple formating')
 parser.add_argument('args',nargs=argparse.REMAINDER)
 
