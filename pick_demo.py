@@ -33,8 +33,9 @@ def pick(root, limit = 4255):
     expr = re.compile('(?P<first>["\'])(?P<expr>.*)(?P=first)\\s*(?P<label>\\(.*?\\))\\s*(?P<sec>[\'\"])(?P<path>.*)(?P=sec)')
     with root.open('rb') as _ifile:
         lines = [_.strip() for _ in _ifile.readlines()]
+#   reordering goes here.
+#   lines = sorted(lines,key=lambda x:len(shlex.split(x)[0]))
     random.shuffle(lines)
-#    lines = sorted(lines,key=lambda x:len(shlex.split(x)[0]))
     for line in lines:
         try:
             parts = shlex.split(line)
@@ -42,7 +43,6 @@ def pick(root, limit = 4255):
             binfile    = pathlib.Path(parts[2]).resolve().absolute()
             label      = parts[1]#gd['label']
             binsize    = check_size(binfile)
-#            print(expr, binfile, label, binsize, file=sys.stderr)
             if binsize + total <= limit:
                 print(line,file=sys.stdout)
                 total += binsize
@@ -52,7 +52,6 @@ def pick(root, limit = 4255):
 
         except Exception as e:
             print(e,file=sys.stderr)
-#            pass
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-e','--expr',type=pathlib.Path)
