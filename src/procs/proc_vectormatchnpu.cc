@@ -47,7 +47,6 @@
 #include "datatypes/wsdt_tuple.h"
 #include "datatypes/wsdt_string.h"
 #include "datatypes/wsdt_binary.h"
-#include "datatypes/wsdt_vector_double.h"
 #include "waterslidedata.h"
 #include "procloader.h"
 #include "label_match.h"
@@ -93,29 +92,38 @@ int proc_destroy(
  *---------------------------------------------------------------------------*/
 
 extern "C" const char proc_name[]        = PROC_NAME;
-extern "C" const char proc_version[]     = "0.1.5";
+extern "C" const char proc_version[]     = "0.1.6";
 extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
 extern "C" const char *const proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
 extern "C" const char proc_purpose[]     = "matches a list of regular expressions and returns...... something";
 extern "C" const char *const proc_synopsis[] = {
-    "vectormatchnpu [-V <label>] -F <file> [-L <label>] [-W] <label of string member to match>"
+    "vectormatchnpu -F <file> [-L <label>] [-W] <label of string member to match> [ -m <result count> ] [-M] [-P] [-S]"
   , nullptr
     };
 extern "C" const char proc_description[] =
     "vectormatchnpu extends vectormatch to perform regular "
     "expression matching.\n"
-    "vectormatchnpu uses LRL's NPU coprocessor. The format of the "
-    "regular expressions are defined in re2/re2.h.\n"
-    "to make a group of expressions sharing a common label have "
+    "vectormatchnpu uses LRL's NPU coprocessor. The syntax of regex"
+    "used is are defined in re2/re2.h.\n"
+    "Expressions are supplied in a config file formatted as:\n"
+    "\t\"expression\" (label) [ \"optional/binary/path\" ]\n"
+    "or\n"
+    "\t\'expression\' (label) [ \"optional/binary/path\" ]\n"
+    "Occurrances of '\"' in double quoted expressions, and ''' in "
+    "single quoted expressions, must be escaped with a \\. This "
+    "backslash is not removed before passing the expression on to "
+    "the compiler, but its presence has no effect on the meaning of "
+    "the expression.\n"
+    "To make a group of expressions sharing a common label have "
     "threshold behavior, use a '#pragma LRL threshold (<LABEL>) <VALUE>' "
     "directive somewhere in the configuration file. (The position of "
     "this directive relative to the expressions using the effected label "
     "doesn't matter.)\n"
     "\n"
     "#pragma LRL threshold (SQL_UNION) 1\n"
-    "\"select\" (SQL_SELECT) 'path/to/select_binary.npu'\n"
+    "\"select\"     (SQL_SELECT) 'path/to/select_binary.npu'\n"
     "\"union\"      (SQL_UNION)\n"
     "\"UNION\"      (SQL_UNION)\n"
     "\n";
@@ -150,21 +158,13 @@ extern "C" const proc_option_t proc_opts[] = {
     "provide a filename of a npu binary to match with.",1,0},
     {'m',"","matches",
     "configure the number of matches to return per status.",0,0},
-    {'P',"","matches",
-    "pass all packets",1,0},
+    {'P',"","",
+    "pass all packets, but add tags",1,0},
     {'v',"","verbosity",
-    "modulate verbosity" },
+    "increase verbosity", 1, 0 },
     {'q',"","quiet",
-    "modulate verbosity ( the oposite of 'v' )" },
+    "decrese verbosity verbosity ( the oposite of 'v' )", 1, 0},
 
-    /*
-     {'T',"","",
-     "tag flows that match (npacket only)",0,0},
-     {'R',"","string",
-     "string to match",0,0},
-     {'Q',"","",
-     "match first pkt only",0,0},
-    */
     //the following must be left as-is to signify the end of the array
     {' ',"","",
     "",0,0}
@@ -187,10 +187,6 @@ extern "C" const proc_port_t proc_input_ports[] = {
 /*-----------------------------------------------------------------------------
  *           D A T A S T R U C T   D E F S
  *---------------------------------------------------------------------------*/
-
-struct flow_data_t {
-    wslabel_t * label;
-};
 
 struct callback_data {
     static constexpr const int capacity = 16ul;
@@ -273,18 +269,6 @@ struct iter_range : std::tuple<It,It> {
     using iterator    = It;
     using super       = std::tuple<iterator,iterator>;
     using super::super;
-/*    std::tuple<It,It> m_d{};
-    usi
-    iter_range() = default;
-    iter_range(iter_range&&) noexcept = default;
-    iter_range(const iter_range&) = default;
-    iter_range&operator=(iter_range &&) noexcept = default;
-    iter_range&operator=(const iter_range &) = default;
-    iter_range(std::tuple<It,It> && args):m_d{args}{}
-    template<class... Args>
-    iter_range(Args && ...args)
-    : m_d(std::forward<Args>(args)...)
-    {}*/
 
     iterator begin() const { return std::get<0>(*this);}
     iterator end()   const { return std::get<1>(*this);}
@@ -309,7 +293,6 @@ struct vectormatch_proc {
     ws_outtype_t *  outtype_tuple{};
 //    wslabel_t * pattern_id_label{};   /* label affixed to the buffer that matches*/
     wslabel_t * matched_label{};   /* label affixed to the buffer that matches*/
-    wslabel_t * vector_name{};      /* label to be affixed to the matched vector */
     wslabel_set_t    lset{};        /* set of labels to search over */
 
     std::bitset<LOCAL_MAX_TYPES> do_tag{};
@@ -328,8 +311,8 @@ struct vectormatch_proc {
     int  verbosity{};
     int  status_size{1};
     bool label_members{}; /* 1 if we should labels matched members*/
-    bool pass_all{false}; /* 1 if we should labels matched members*/
-    bool single_stream{false};
+    bool pass_all{}; /* 1 if we should labels matched members*/
+    bool single_stream{};
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
    ~vectormatch_proc();
@@ -403,7 +386,7 @@ vectormatch_proc::~vectormatch_proc()
                 }
             }
             if(qd.is_last) {
-                if (got_match && matched_label) { /* this is the -L option label */
+                if (got_match && matched_label && !wsdata_check_label(qd.input_data,matched_label)) { /* this is the -L option label */
                     wsdata_add_label(
                         qd.input_data,
                         matched_label);
@@ -441,7 +424,6 @@ static int vectormatch_npu_log_cb(void *, int level, const char *fmt, va_list ar
 }
 const proc_labeloffset_t proc_labeloffset[] = {
 //    {"MATCH",offsetof(proc_instance_t, umatched_label)},
-//    {"VECTOR",offsetof(proc_instance_t,vector_name)},
 //    {"PATTERN_ID",offsetof(vectormatch_proc, pattern_id_label)}
 };
 
@@ -555,19 +537,6 @@ int vectormatch_proc::cmd_options(
                 F_opt++;
                 break;
             }
-            /* These are present in proc_match.  We may want to include them here
-            * at some point */
-
-            /*
-            case 'T':
-            proc->tag_flows = 1;
-            break;
-
-            case 'Q':
-            proc->fpkt_only = 1;
-            proc->label_fpkt = wsregister_label(type_table, "FIRSTPKT");
-            break;
-            */
             default: {
                 tool_print("Unknown command option supplied");
                 exit(-1);
@@ -672,7 +641,7 @@ int vectormatch_proc::cmd_options(
                     if(pattern_id >= 0) {
                         if(grp.pid < 0)
                             grp.pid = pattern_id;
-        //                grp.pid = pattern_id;
+
                         term_map.emplace(pattern_id, std::ref(grp));
                         tool_print("Loaded string '%s' label '%s' -> %d",
                             vals.first.c_str(), grp.label->name, pattern_id);
@@ -691,58 +660,19 @@ int vectormatch_proc::cmd_options(
                 }
                 if(grp.pid < 0)
                     grp.pid = pattern_id;
-//                grp.pid = pattern_id;
+
                 term_map.emplace(pattern_id, std::ref(grp));
                 tool_print("Loaded string '%s' label '%s' -> %d",
                     vals.first.c_str(), grp.label->name, pattern_id);
             }
         }
-/*        if(!term.binfile.empty()) {
-            auto pattern_id = npu_pattern_insert_binary_file(
-                driver
-              , term.binfile.c_str()
-                );
-            if(pattern_id < 0) {
-                error_print("failed to insert pattern '%s', file '%s'", term.pattern.c_str(), term.binfile.c_str());
-                continue;
-            }
-            term_map.emplace(pattern_id, std::ref(term));
-            tool_print("Loaded file '%s' with string '%s' label '%s' -> %d",
-                term.binfile.c_str(), term.pattern.c_str(), term.label->name, pattern_id);
-        }else if(term.matchlen) {
-            auto pattern_id = npu_pattern_insert_pcre(
-                driver
-              , term.pattern.c_str()
-              , term.matchlen
-              , ""
-                );
-            if(pattern_id < 0) {
-                error_print("failed to insert pattern '%s'", term.pattern.c_str());
-                continue;
-            }
-            term_map.emplace(pattern_id, std::ref(term));
-            tool_print("Loaded string '%s' label '%s' -> %d",
-                term.pattern.c_str(), term.label->name, pattern_id);
-        }else{
-            auto pattern_id = npu_pattern_insert_binary_file(
-                driver
-              , term.pattern.c_str()
-                );
-            if(pattern_id < 0) {
-                error_print("failed to insert pattern %s", term.pattern.c_str());
-                continue;
-            }
-            term_map.emplace(pattern_id, std::ref(term));
-            tool_print("Loaded string '%s' label '%s' -> %d",
-                term.pattern.c_str(), term.label->name, pattern_id);
-        }*/
      }
      npu_pattern_load(driver);
-//     npu_log_set_level(driver,(NPULogLevel)((int)NPU_INFO - verbosity));
+
      npu_log_set_level(driver,(NPULogLevel)(int(NPU_INFO) - verbosity));
      status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(driver));
      status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(driver),npu_pattern_capacity(driver));
-     client = nullptr;
+
      if(npu_client_attach(&client,driver) != 0) {
           error_print("could not crete a client for holding reference to npuDriver");
           return 0;
@@ -969,7 +899,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
             }
             if(qd.is_last ){
                 if(qd.input_data) {
-                    if (got_match && matched_label) { /* this is the -L option label */
+                    if (got_match && matched_label && !wsdata_check_label(qd.input_data,matched_label)) { /* this is the -L option label */
                         wsdata_add_label(qd.input_data,matched_label);
                     }
                     if(got_match || pass_all || do_tag[qd.type_index]) {
@@ -1167,10 +1097,6 @@ int proc_destroy(void * vinstance)
 {
     auto proc = (vectormatch_proc*)vinstance;
 
-//    tool_print("meta_proc cnt %" PRIu64, proc->meta_process_cnt);
-//    tool_print("matched tuples cnt %" PRIu64, proc->hits);
-//    tool_print("output cnt %" PRIu64, proc->outcnt);
-
     delete proc;
     return 1;
 }
@@ -1200,7 +1126,7 @@ int vectormatch_proc::add_element(void * type_table,
         std::tie(it,std::ignore) = term_groups.emplace(newlab, pattern_group{ newlab } );
     }
     auto &grp = it->second;
-//    term_vector.emplace_back();
+
     auto bindata = std::string{};
     if(binstr) {
         try {
