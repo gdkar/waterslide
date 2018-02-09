@@ -99,7 +99,7 @@ extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL
 extern "C" const char *const proc_tags[]     = { "match", "vector", "npu", "LRL", NULL };
 extern "C" const char proc_purpose[]     = "matches a list of regular expressions and returns...... something";
 extern "C" const char *const proc_synopsis[] = {
-    "vectormatchnpu -F <file> [-L <label>] [-W] <label of string member to match> [ -m <result count> ] [-M] [-P] [-S]"
+    "vectormatchnpu -F <file> [-L <label>] [-W] <label of string member to match> [ -m <result count> ] [-M] [-P] [-S] [ -v [ <level> ] ] [ -q [ <level> ] ]"
   , nullptr
     };
 extern "C" const char proc_description[] =
@@ -116,6 +116,11 @@ extern "C" const char proc_description[] =
     "backslash is not removed before passing the expression on to "
     "the compiler, but its presence has no effect on the meaning of "
     "the expression.\n"
+    "The optional binary path can point to a precompiled NPU binary "
+    "to request that vectormatchnpu attempt to use that instead of "
+    "recompiling the given expression. If that path isn't supplied, "
+    "doesn't exist, or isn't suitable, vectormatchnpu will fall back to "
+    "compiling the expression anyway.\n"
     "To make a group of expressions sharing a common label have "
     "threshold behavior, use a '#pragma LRL threshold (<LABEL>) <VALUE>' "
     "directive somewhere in the configuration file. (The position of "
