@@ -2,8 +2,8 @@
 from __future__ import print_function
 
 import sys, subprocess as sb, re
-import posix, posixpath as ppath
-import argparse,pathlib, resource, signal
+import posix, posixpath
+import argparse, resource, signal
 
 
 parser = argparse.ArgumentParser('a ytility to precompile vectormatchnpu format config files for faster load')
@@ -19,7 +19,7 @@ parser.add_argument('args',nargs=argparse.REMAINDER)
 
 args = parser.parse_args()
 
-odir = pathlib.Path(args.output or args.input + '.preproc')
+odir = args.output or args.input + '.preproc'
 
 def limit_Popen(time_limit=15, mem_limit=int(2**31),input=None, cmdline=[],*args, **kwargs):
     def preexec():
@@ -32,23 +32,23 @@ def limit_Popen(time_limit=15, mem_limit=int(2**31),input=None, cmdline=[],*args
     return sb.Popen(cmdline,*args,preexec_fn=preexec, **kwargs)
 
 if args.absolute:
-    odir = odir.resolve().absolute()
+    odir = posixpath.abspath(odir)
 
-ifile = pathlib.Path(args.input)
-ofile = odir.joinpath(ifile.name)
-od = ofile.parent
+ifile = args.input
+ofile = posixpath.join(odir,posixpath.basename(name))
+od = posixpath.parent(ofile)
 parts = []
-while not od.exists():
+while not posixpath.exists(od)
     parts.append(od)
-    od = od.parent
+    od = posixpath.pardir(od)
 for od in parts:
-    od.mkdir()
+    posix.mkdir(od)
 
 #posix.mkdir(odir)
 count = 0
 expr = re.compile('"(.*)"(\\s*\\(.*?\\))?')
-with ifile.open('rb') as _ifile:
-    with ofile.open('wb') as _ofile:
+with open(ifile,'rb') as _ifile:
+    with open(ofile,'wb') as _ofile:
         q = []
         if args.fmt:
             for line in _ifile:
@@ -66,11 +66,11 @@ with ifile.open('rb') as _ifile:
                         retcode = pop.wait()
                         if retcode < 0:
                             print('warning, expression {} returned error code {}'.format(expression,retcode))
-                        if not binfile.exists():
+                        if not posixpath.exists(binfile):
                             print('FAILURE: {} "{}" returned {}'.format(retcode, expression, retcode))
                             continue
 
-                        _ofile.write('"{}"\t{} "{}"\n'.format(expression,label, binfile.as_posix()))
+                        _ofile.write('"{}"\t{} "{}"\n'.format(expression,label, binfile))
                     elif len(q) <= wait:
                         break
 
@@ -84,8 +84,8 @@ with ifile.open('rb') as _ifile:
                         expression = m.group(1).replace('/','\\x2f')
                         label = m.group(2) or " (L{})".format(count)
 
-                    binfile = odir.joinpath( 'expression-{}.npup'.format(count))
-                    pop = limit_Popen(cmdline=['dc','-q','12','-e',expression,'-o',binfile.as_posix()] + args.args)
+                    binfile = posixpath.join(odir,'expression-{}.npup'.format(count))
+                    pop = limit_Popen(cmdline=['dc','-q','12','-e',expression,'-o',binfile] + args.args)
                     q.append((pop,expression,label,binfile))
                     count += 1
                     proc()
