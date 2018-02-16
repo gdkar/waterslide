@@ -35,12 +35,12 @@ if args.absolute:
     odir = posixpath.abspath(odir)
 
 ifile = args.input
-ofile = posixpath.join(odir,posixpath.basename(name))
-od = posixpath.parent(ofile)
+ofile = posixpath.join(odir,posixpath.basename(ifile))
+od = posixpath.dirname(ofile)
 parts = []
-while not posixpath.exists(od)
+while not posixpath.exists(od):
     parts.append(od)
-    od = posixpath.pardir(od)
+    od = posixpath.dirname(od)
 for od in parts:
     posix.mkdir(od)
 
