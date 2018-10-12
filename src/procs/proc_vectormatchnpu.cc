@@ -87,6 +87,81 @@ int proc_destroy(
     void * vinstance
     );
 }
+static int vectormatch_npu_log_cb(void *, int level, const char *fmt, va_list args)
+{
+    char msg[4096] = { 0, };
+    vsnprintf(msg,sizeof(msg),fmt, args);
+    if(level >= int(NPU_ERROR)) {
+        error_print("%s",msg);
+    }else if(level >= int(NPU_DEBUG)) {
+        tool_print("%s",msg);
+    }else{
+        dprint("%s",msg);
+    }
+    return 0;
+}
+
+struct npu_registry {
+    mutable std::mutex  m_mtx{};
+    std::unique_lock<std::mutex> lock() const
+    {
+        return std::unique_lock<std::mutex>{m_mtx};
+    }
+
+    struct reg_entry {
+        npu_driver * drv{};
+        std::array<bool, 2> claimed{};
+    };
+    std::map<std::string, reg_entry> m_map{};
+
+    npu_driver *claim_device(const std::string & device_name, int _chain, int verbosity = 0)
+    {
+        tool_print("trying to claim chain %d for device %s\n",_chain,device_name.c_str());
+        if(_chain < 0 || _chain >= 2 || !device_name.size()) {
+            error_print("invalid device and chain requested, %s, %d\n",device_name.c_str(),_chain);
+            return nullptr;
+        }
+        auto _lock      = lock();
+        auto &_entry    = m_map[device_name];
+        if(_entry.claimed[_chain]) {
+            error_print("chain %d for device %s already claimed\n",_chain,device_name.c_str());
+            return nullptr;
+        }
+        if(!_entry.drv) {
+            tool_print("device %s no open yet ",device_name.c_str());
+            auto &driver = _entry.drv;
+            driver = npu_driver_alloc();
+            if(!driver)
+                return nullptr;
+            npu_log_set_level(driver,NPULogLevel(int(NPU_INFO) - verbosity));
+            npu_log_set_handler(driver,(void*)this, &vectormatch_npu_log_cb);
+            npu_driver_set_dual_chain(driver,true);
+            if(npu_driver_open(&driver,device_name.c_str()) != 0) {
+                error_print("failed to open NPU hardware device");
+                npu_driver_free(&driver);
+                return nullptr;
+            }
+            _entry.claimed[_chain] = true;
+            {
+                auto tmp = npu_driver_get_chain(driver, 1);
+                npu_driver_free(&driver);
+                driver = tmp;
+                if(_chain == 1)
+                    return driver;
+            }
+            {
+                auto tmp = npu_driver_get_chain(driver, 0);
+                npu_driver_free(&driver);
+                driver = tmp;
+                return driver;
+            }
+        }
+        _entry.claimed[_chain] = true;
+        return npu_driver_get_chain(_entry.drv, _chain);
+    }
+};
+
+static npu_registry npu_reg{};
 /*-----------------------------------------------------------------------------
  *                  G L O B A L S
  *---------------------------------------------------------------------------*/
@@ -320,6 +395,7 @@ struct vectormatch_proc {
     bool single_stream{};
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
+    int         chain_index = 0;
    ~vectormatch_proc();
     int loadfile(void *type_table, const char *filename);
 
@@ -350,7 +426,7 @@ struct vectormatch_proc {
 };
 vectormatch_proc::~vectormatch_proc()
 {
-
+    npu_client_flush(client);
     npu_client_free(&client);
     npu_thread_stop(driver);
     npu_driver_close(&driver);
@@ -414,19 +490,6 @@ vectormatch_proc::~vectormatch_proc()
     tool_print("max status cnt %d" , max_status);
 }
 
-static int vectormatch_npu_log_cb(void *, int level, const char *fmt, va_list args)
-{
-    char msg[4096] = { 0, };
-    vsnprintf(msg,sizeof(msg),fmt, args);
-    if(level >= int(NPU_ERROR)) {
-        error_print("%s",msg);
-    }else if(level >= int(NPU_DEBUG)) {
-        tool_print("%s",msg);
-    }else{
-        dprint("%s",msg);
-    }
-    return 0;
-}
 const proc_labeloffset_t proc_labeloffset[] = {
 //    {"MATCH",offsetof(proc_instance_t, umatched_label)},
 //    {"PATTERN_ID",offsetof(vectormatch_proc, pattern_id_label)}
@@ -448,7 +511,7 @@ int vectormatch_proc::cmd_options(
     int F_opt = 0;
 //    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 
-    while ((op = getopt(argc, argv, "SPm:B:E:D:q:v::F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "SPm:B:E:D:C:q:v::F:L:M")) != EOF) {
         switch (op) {
           case 'S':{
                 single_stream = true;
@@ -527,6 +590,10 @@ int vectormatch_proc::cmd_options(
                 device_name = optarg;;
                 break;
             }
+            case 'C':{
+                std::istringstream{optarg}>>chain_index;
+                break;
+            }
             case 'L':{  /* labels an entire tuple and  matching members. */
                 tool_print("Registering label '%s' for matching buffers.", optarg);
                 matched_label = wsregister_label(type_table, optarg);
@@ -558,15 +625,29 @@ int vectormatch_proc::cmd_options(
         dprint("searching for string with label %s",argv[optind]);
         optind++;
     }
-    driver = npu_driver_alloc();
+    driver = npu_reg.claim_device(device_name, chain_index, verbosity);
+//    npu_driver_alloc();
     if(!driver)
         return 0;
+/*
     npu_log_set_level(driver,NPULogLevel(int(NPU_INFO) - verbosity));
     npu_log_set_handler(driver,(void*)this, &vectormatch_npu_log_cb);
+    npu_driver_set_dual_chain(driver,true);
     if(npu_driver_open(&driver,device_name.c_str()) != 0) {
           error_print("failed to open NPU hardware device");
           return 0;
      }
+    {
+     auto tmp = npu_driver_get_chain(driver, 1);
+     npu_driver_free(&driver);
+     driver = tmp;
+    }
+    {
+     auto tmp = npu_driver_get_chain(driver, 0);
+     npu_driver_free(&driver);
+     driver = tmp;
+    }
+    */
 //    npu_log_set_level(driver,(NPULogLevel)((int)NPU_WARN));
     for(auto & gpair: term_groups) {
         auto & grp = gpair.second;
@@ -781,6 +862,7 @@ proc_process_t vectormatch_proc::input_set(
 namespace {
 void result_cb(void *opaque, const npu_result *res)
 {
+//    error_print("result up %p",opaque);
     if(res->nmatches) {
         auto priv = static_cast<callback_data*>(opaque);
         if(priv->nmatches + res->nmatches > priv->capacity) {
@@ -798,6 +880,7 @@ void result_cb(void *opaque, const npu_result *res)
 void cleanup_cb(void *opaque)
 {
     auto priv = static_cast<callback_data*>(opaque);
+//    error_print("cleaning up %p",opaque);
     priv->is_done.store(true);
 }
 }
@@ -847,7 +930,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
         qd.member_data = nullptr;
         qd.is_last = true;
 
-        auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
+        auto err = npu_client_new_packet(client, {result_cb, cleanup_cb,&qd});
         if(err < 0)
             qd.is_done.store(true);
         npu_client_end_packet(client);
@@ -957,7 +1040,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                     qd.member_data= member;
                     qd.type_index = type_index;
                     qd.is_last     = (++nsub == nbin);
-                    auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
+                    auto err = npu_client_new_packet(client, {result_cb, cleanup_cb,&qd});
                     if(err < 0) {
                         qd.is_last = true;
                         qd.is_done.store(true);
@@ -994,6 +1077,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
             }
         }
     }
+//    npu_client_flush(client);
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++outcnt;
@@ -1051,7 +1135,7 @@ int vectormatch_proc::process_allstr(
             qd.type_index = type_index;
             qd.is_last     = (++nsub == nbin);
             submitted = true;
-            auto err = npu_client_new_packet(client, &qd, result_cb, cleanup_cb);
+            auto err = npu_client_new_packet(client, {result_cb, cleanup_cb,&qd});
             if(err < 0) {
                 qd.is_last = true;
                 qd.is_done.store(true);
@@ -1086,6 +1170,7 @@ int vectormatch_proc::process_allstr(
                 npu_client_end_packet(client);
             }
     }
+//    npu_client_flush(client);
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++outcnt;
