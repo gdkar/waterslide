@@ -41,6 +41,7 @@
 #include <utility>   //sqrt
 #include <functional>   //sqrt
 #include <cerrno>  //errno
+#include <funny-car/funny-car.hpp>
 #include <funny-car/funny-car-c.h>
 #include "waterslide.h"
 #include "datatypes/wsdt_fixedstring.h"
@@ -109,55 +110,64 @@ struct npu_registry {
     }
 
     struct reg_entry {
-        npu_driver * drv{};
+        std::weak_ptr<npu_driver> drv{};
         std::array<bool, 2> claimed{};
     };
     std::map<std::string, reg_entry> m_map{};
 
-    npu_driver *claim_device(const std::string & device_name, int _chain, int verbosity = 0)
+    std::shared_ptr<npu_driver> claim_device(const std::string & device_name, int _chain, int verbosity = 0)
     {
         tool_print("trying to claim chain %d for device %s\n",_chain,device_name.c_str());
         if(_chain < 0 || _chain >= 2 || !device_name.size()) {
             error_print("invalid device and chain requested, %s, %d\n",device_name.c_str(),_chain);
-            return nullptr;
+            return {};
         }
-        auto _lock      = lock();
-        auto &_entry    = m_map[device_name];
-        if(_entry.claimed[_chain]) {
-            error_print("chain %d for device %s already claimed\n",_chain,device_name.c_str());
-            return nullptr;
-        }
-        if(!_entry.drv) {
-            tool_print("device %s no open yet ",device_name.c_str());
-            auto &driver = _entry.drv;
-            driver = npu_driver_alloc();
-            if(!driver)
-                return nullptr;
-            npu_log_set_level(driver,NPULogLevel(int(NPU_INFO) - verbosity));
-            npu_log_set_handler(driver,(void*)this, &vectormatch_npu_log_cb);
-            npu_driver_set_dual_chain(driver,true);
-            if(npu_driver_open(&driver,device_name.c_str()) != 0) {
-                error_print("failed to open NPU hardware device");
-                npu_driver_free(&driver);
-                return nullptr;
+        try {
+            auto _lock      = lock();
+            auto &_entry    = m_map[device_name];
+            if(_entry.claimed[_chain]) {
+                error_print("chain %d for device %s already claimed\n",_chain,device_name.c_str());
+                return {};
+            }
+            auto driver = _entry.drv.lock();
+            if(!driver) {
+                tool_print("device %s no open yet ",device_name.c_str());
+                _entry.drv = driver= std::make_shared<npu_driver>();
+
+                if(!driver)
+                    return {};
+                
+                driver->set_log_level(NPULogLevel(int(NPU_INFO) - verbosity));
+                driver->set_log_handler((void*)this, &vectormatch_npu_log_cb);
+                driver->set_dual_chain(true);
+                driver->open(device_name.c_str());
+                _entry.claimed[_chain] = true;
+                if(_chain == 1)
+                {
+                    auto tmp = std::make_shared<npu_driver>(driver->get_chain(1));
+                    _entry.drv = driver = tmp;
+                }
+                return driver;
+/*                {
+                    auto tmp = std::make_shared<npu_driver>(driver->get_chain(0));
+                    _entry.drv = driver = tmp;
+//                    if(_chain == 1)
+//                        return driver;
+                }*/
+//                return driver;
+    /*            {
+                    auto tmp = npu_driver_get_chain(driver, 0);
+                    npu_driver_free(&driver);
+                    driver = tmp;
+                    return driver;
+                }*/
             }
             _entry.claimed[_chain] = true;
-            {
-                auto tmp = npu_driver_get_chain(driver, 1);
-                npu_driver_free(&driver);
-                driver = tmp;
-                if(_chain == 1)
-                    return driver;
-            }
-            {
-                auto tmp = npu_driver_get_chain(driver, 0);
-                npu_driver_free(&driver);
-                driver = tmp;
-                return driver;
-            }
+            return std::make_shared<npu_driver>(driver->get_chain(_chain));
+        } catch(const std::exception & e) {
+            error_print("caught an exception, %s\n",e.what());
+            return {};
         }
-        _entry.claimed[_chain] = true;
-        return npu_driver_get_chain(_entry.drv, _chain);
     }
 };
 
@@ -386,7 +396,7 @@ struct vectormatch_proc {
             >
         > cb_queue;
     bool                              got_match{false};
-    npu_driver                       *driver{};
+    std::shared_ptr<npu_driver>       driver{};
     npu_client                       *client{};
     int  verbosity{};
     int  status_size{1};
@@ -428,8 +438,9 @@ vectormatch_proc::~vectormatch_proc()
 {
     npu_client_flush(client);
     npu_client_free(&client);
-    npu_thread_stop(driver);
-    npu_driver_close(&driver);
+    driver->thread_stop();
+    driver->close();
+    driver.reset();
     while(!cb_queue.empty()) {
         if(cb_queue.front()->empty())
             cb_queue.pop_front();
@@ -666,7 +677,7 @@ int vectormatch_proc::cmd_options(
             }
             if(grp.divisor > 1) {
                 auto pattern_id = npu_pattern_insert_rate_limited_group(
-                    driver
+                      driver.get()
                     , gexpr.data()
                     , gelen.data()
                     , grp.size()
@@ -689,7 +700,7 @@ int vectormatch_proc::cmd_options(
 
             }else{
                 auto pattern_id = npu_pattern_insert_anchored_group(
-                    driver
+                    driver.get()
                     , gexpr.data()
                     , gelen.data()
                     , gbins.data()
@@ -720,7 +731,7 @@ int vectormatch_proc::cmd_options(
                 auto vals = grp.at(i);
                 if(vals.second.size()) {
                     auto pattern_id = npu_pattern_insert_binary(
-                        driver
+                        driver.get()
                         , vals.second.c_str()
                         , vals.second.size()
                         );
@@ -735,7 +746,7 @@ int vectormatch_proc::cmd_options(
                     }
                 }
                 auto pattern_id = npu_pattern_insert_pcre(
-                    driver
+                    driver.get()
                     , vals.first.c_str()
                     , vals.first.size()
                     , ""
@@ -753,18 +764,18 @@ int vectormatch_proc::cmd_options(
             }
         }
      }
-     npu_pattern_load(driver);
+     npu_pattern_load(driver.get());
 
-     npu_log_set_level(driver,(NPULogLevel)(int(NPU_INFO) - verbosity));
-     status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(driver));
-     status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(driver),npu_pattern_capacity(driver));
+     npu_log_set_level(driver.get(),(NPULogLevel)(int(NPU_INFO) - verbosity));
+     status_print("number of loaded patterns: %d\n", (int)npu_pattern_count(driver.get()));
+     status_print("device fill level: %d / %d\n", (int)npu_pattern_fill(driver.get()),npu_pattern_capacity(driver.get()));
 
-     if(npu_client_attach(&client,driver) != 0) {
+     if(npu_client_attach(&client,driver.get()) != 0) {
           error_print("could not crete a client for holding reference to npuDriver");
           return 0;
      }
-     npu_driver_set_matches(driver, status_size);
-     if(npu_thread_start(driver) != 0) {
+     npu_driver_set_matches(driver.get(), status_size);
+     if(npu_thread_start(driver.get()) != 0) {
           error_print("could not start DPU thread");
           return 0;
      }
@@ -938,7 +949,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
     npu_client_flush(client);
     if(dtype_is_exit_flush(input_data)) {
         npu_client_free(&client);
-        npu_thread_stop(driver);
+        npu_thread_stop(driver.get());
     }
     return process_common(input_data,dout,type_index);
 }
