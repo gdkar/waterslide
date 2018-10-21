@@ -57,7 +57,6 @@
  *                  D E F I N E S
  *---------------------------------------------------------------------------*/
 #define LOCAL_MAX_TYPES 25
-#define LOCAL_VECTOR_SIZE 2000
 
 using namespace funny_car;
 /*-----------------------------------------------------------------------------
@@ -118,52 +117,70 @@ struct npu_registry {
     std::shared_ptr<npu_driver> claim_device(const std::string & device_name, int _chain, int verbosity = 0)
     {
         tool_print("trying to claim chain %d for device %s\n",_chain,device_name.c_str());
-        if(_chain < 0 || _chain >= 2 || !device_name.size()) {
+        if(_chain < -1 || _chain >= 2 || !device_name.size()) {
             error_print("invalid device and chain requested, %s, %d\n",device_name.c_str(),_chain);
             return {};
         }
         try {
-            auto _lock      = lock();
-            auto &_entry    = m_map[device_name];
-            if(_entry.claimed[_chain]) {
-                error_print("chain %d for device %s already claimed\n",_chain,device_name.c_str());
-                return {};
-            }
-            auto driver = _entry.drv.lock();
-            if(!driver) {
-                tool_print("device %s no open yet ",device_name.c_str());
-                _entry.drv = driver= std::make_shared<npu_driver>();
-
-                if(!driver)
+            if(_chain == -1) {
+                auto _lock      = lock();
+                {
+                    auto it = m_map.find(device_name);
+                    if(it != m_map.end()) {
+                        if(it->second.drv.lock()) {
+                            error_print("more than one kid cannot claim a device in single-chain mode");
+                            return {};
+                        }
+                    }
+                }
+                auto &_entry    = m_map[device_name];
+                auto driver = _entry.drv.lock();
+                if(driver) {
+                    error_print("device %s already open yet ",device_name.c_str());
+                    error_print("more than one kid cannot claim a device in single-chain mode");
                     return {};
-                
+                }
+                _entry.drv = driver= std::make_shared<npu_driver>();
+                    
                 driver->set_log_level(NPULogLevel(int(NPU_INFO) - verbosity));
                 driver->set_log_handler((void*)this, &vectormatch_npu_log_cb);
-                driver->set_dual_chain(true);
+                driver->set_dual_chain(false);
                 driver->open(device_name.c_str());
-                _entry.claimed[_chain] = true;
-                if(_chain == 1)
-                {
-                    auto tmp = std::make_shared<npu_driver>(driver->get_chain(1));
-                    _entry.drv = driver = tmp;
-                }
+                _entry.claimed = { true, true};
                 return driver;
-/*                {
-                    auto tmp = std::make_shared<npu_driver>(driver->get_chain(0));
-                    _entry.drv = driver = tmp;
-//                    if(_chain == 1)
-//                        return driver;
-                }*/
-//                return driver;
-    /*            {
-                    auto tmp = npu_driver_get_chain(driver, 0);
-                    npu_driver_free(&driver);
-                    driver = tmp;
+            } else {
+                auto _lock      = lock();
+                auto &_entry    = m_map[device_name];
+                if(_entry.claimed[_chain]) {
+                    error_print("chain %d for device %s already claimed\n",_chain,device_name.c_str());
+                    return {};
+                }
+                auto driver = _entry.drv.lock();
+                if(!driver) {
+                    tool_print("device %s no open yet ",device_name.c_str());
+                    _entry.drv = driver= std::make_shared<npu_driver>();
+
+                    if(!driver)
+                        return {};
+                    
+                    driver->set_log_level(NPULogLevel(int(NPU_INFO) - verbosity));
+                    driver->set_log_handler((void*)this, &vectormatch_npu_log_cb);
+                    driver->set_dual_chain(true);
+                    driver->open(device_name.c_str());
+                    _entry.claimed[_chain] = true;
+                    if(_chain == 1)
+                    {
+                        auto tmp = std::make_shared<npu_driver>(driver->get_chain(1));
+                        _entry.drv = driver = tmp;
+                    }
                     return driver;
-                }*/
+                } else if(!driver->dual_chain()) {
+                    error_print("device %s already claimed as single-chain\n",device_name.c_str());
+                    return {}; 
+                }
+                _entry.claimed[_chain] = true;
+                return std::make_shared<npu_driver>(driver->get_chain(_chain));
             }
-            _entry.claimed[_chain] = true;
-            return std::make_shared<npu_driver>(driver->get_chain(_chain));
         } catch(const std::exception & e) {
             error_print("caught an exception, %s\n",e.what());
             return {};
@@ -262,7 +279,9 @@ extern "C" const proc_option_t proc_opts[] = {
 extern "C" const char proc_nonswitch_opts[]               = "LABEL of string member to match";
 extern "C" const char *const proc_input_types[]           = {"tuple","flush", nullptr};  //removed "npacket"
 extern "C" const char *const proc_output_types[]          = {"tuple", nullptr}; //removed "npacket"
-extern "C" const char *const proc_tuple_member_labels[]    = {nullptr};
+extern "C" const char *const proc_tuple_member_labels[]    = {NULL};
+
+
 extern "C" const char proc_requires[]              = "";
 extern "C" const char *const proc_tuple_container_labels[] = {nullptr};
 extern "C" const char *const proc_tuple_conditional_container_labels[] = {nullptr};
@@ -270,6 +289,7 @@ extern "C" const char *const proc_tuple_conditional_container_labels[] = {nullpt
 extern "C" const proc_port_t proc_input_ports[] = {
     {"none","pass if match"},
     {"TAG","pass all, label tuple if match"},
+    {"STATUS","pass performance and device status"},
     {nullptr, nullptr}
 };
 #endif //MP_DOCS
@@ -374,12 +394,62 @@ iter_range<It> make_iter_range( Tup && tup)
  *              P R O C _ I N S T A N C E
  *---------------------------------------------------------------------------*/
 struct vectormatch_proc {
-    uint64_t meta_process_cnt{};
-    uint64_t hits{};
-    uint64_t outcnt{};
-    uint64_t hw_overflow{};
-    uint64_t qd_overflow{};
-    int      max_status{};
+    using size_type = uint64_t;
+    using difference_type = intptr_t;
+
+    struct status_info {
+        size_type meta_process_cnt{};
+        size_type hit_cnt{};
+        size_type out_cnt{};
+        size_type hw_overflow{};
+        size_type qd_overflow{};
+        size_type byte_cnt{};
+        int       max_matches{};
+        int64_t   start_ts   {};
+
+        static status_info make_info()
+        {
+            auto res = status_info{};
+            auto ts = timespec{};
+            clock_gettime(CLOCK_REALTIME, &ts);
+            res.start_ts = ts.tv_sec * 1000000000l + ts.tv_nsec;
+            return res;
+        }
+        status_info &operator+=(const status_info &o)
+        {
+            meta_process_cnt += o.meta_process_cnt;
+            hit_cnt          += o.hit_cnt;
+            out_cnt           += o.out_cnt;
+            hw_overflow      += o.hw_overflow;
+            qd_overflow      += o.qd_overflow;
+            byte_cnt        += o.byte_cnt;
+            max_matches     = std::max(max_matches,o.max_matches);
+            return *this;
+        }
+    };
+    struct status_labels {
+        wslabel_t *event_cnt;
+        wslabel_t *hit_cnt;
+        wslabel_t *out_cnt;
+        wslabel_t *byte_cnt;
+        wslabel_t *start_ts;
+        wslabel_t *end_ts;
+        wslabel_t *interval;
+        wslabel_t *event_rate;
+        wslabel_t *bandwidth;
+        wslabel_t *hw_overflow;
+        wslabel_t *qd_overflow;
+        wslabel_t *max_matches;
+        wslabel_t *device_temp;
+    };
+    status_labels stats_labels = {nullptr};
+    status_info status_total{};
+    status_info status_incremental{};
+
+    wslabel_t *status_label{};
+    wslabel_t *status_incr_label{};
+    wslabel_t *status_total_label{};
+
     ws_outtype_t *  outtype_tuple{};
 //    wslabel_t * pattern_id_label{};   /* label affixed to the buffer that matches*/
     wslabel_t * matched_label{};   /* label affixed to the buffer that matches*/
@@ -405,7 +475,7 @@ struct vectormatch_proc {
     bool single_stream{};
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
-    int         chain_index = 0;
+    int         chain_index = -1;
    ~vectormatch_proc();
     int loadfile(void *type_table, const char *filename);
 
@@ -418,12 +488,15 @@ struct vectormatch_proc {
                 const char *restr, const char *binstr, size_t matchlen,
                 const char *labelstr);
 
-    static int proc_process_meta(void *, wsdata_t*, ws_doutput_t*, int);
+/*    static int proc_process_meta(void *, wsdata_t*, ws_doutput_t*, int);
     static int proc_process_allstr(void *, wsdata_t*, ws_doutput_t*, int);
     static int proc_process_flush(void *, wsdata_t*, ws_doutput_t*, int);
+    static int proc_process_status(void *, wsdata_t*,ws_doutput_t*,int);
+*/
     int process_meta(wsdata_t*, ws_doutput_t*, int);
     int process_allstr(wsdata_t*, ws_doutput_t*, int);
     int process_flush(wsdata_t*, ws_doutput_t*, int);
+    int process_status(wsdata_t*, ws_doutput_t*, int);
     int process_common(wsdata_t*, ws_doutput_t*, int);
 
     proc_process_t input_set(
@@ -449,15 +522,15 @@ vectormatch_proc::~vectormatch_proc()
             if(!qd.is_done.load())
                 continue;
             if(qd.nmatches && !got_match) {
-                hits++;
+                status_incremental.hit_cnt++;
                 got_match = true;
             }
             if(qd.hw_overflow)
-                hw_overflow++;
+                status_incremental.hw_overflow++;
             if(qd.qd_overflow)
-                qd_overflow++;
+                status_incremental.qd_overflow++;
 
-            max_status = std::max<int>(max_status,qd.nmatches);
+            status_incremental.max_matches = std::max<int>(status_incremental.max_matches,qd.nmatches);
             for(auto i = 0; i < qd.nmatches; ++i) {
                 auto mval = qd.matches[i];
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
@@ -493,12 +566,14 @@ vectormatch_proc::~vectormatch_proc()
             cb_queue.front()->pop_front();
         }
     }
-    tool_print("meta_proc cnt %" PRIu64, meta_process_cnt);
-    tool_print("matched tuples cnt %" PRIu64, hits);
-    tool_print("output cnt %" PRIu64, outcnt);
-    tool_print("hardware overflow cnt %" PRIu64, hw_overflow);
-    tool_print("queue overflow cnt %" PRIu64, qd_overflow);
-    tool_print("max status cnt %d" , max_status);
+    status_total += status_incremental;
+    tool_print("meta_proc cnt %" PRIu64, status_total.meta_process_cnt);
+    tool_print("matched tuples cnt %" PRIu64, status_total.hit_cnt);
+    tool_print("output cnt %" PRIu64, status_total.out_cnt);
+    tool_print("hardware overflow cnt %" PRIu64, status_total.hw_overflow);
+    tool_print("queue overflow cnt %" PRIu64, status_total.qd_overflow);
+    tool_print("max status cnt %d" , status_total.max_matches);
+    tool_print("bytes processed %" PRIu64, status_total.byte_cnt);
 }
 
 const proc_labeloffset_t proc_labeloffset[] = {
@@ -522,7 +597,7 @@ int vectormatch_proc::cmd_options(
     int F_opt = 0;
 //    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 
-    while ((op = getopt(argc, argv, "SPm:B:E:D:C:q:v::F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "SPm:B:s:r:R:E:D:C:q:v::F:L:M")) != EOF) {
         switch (op) {
           case 'S':{
                 single_stream = true;
@@ -572,7 +647,6 @@ int vectormatch_proc::cmd_options(
                 }
                break;
             }
-
             case 'M':{  /* label tuple data members that match */
                 label_members = true;
                 break;
@@ -610,6 +684,21 @@ int vectormatch_proc::cmd_options(
                 matched_label = wsregister_label(type_table, optarg);
                 break;
             }
+            case 'R':{  /* labels an entire tuple and  matching members. */
+                tool_print("Registering label '%s' for status tuples.", optarg);
+                status_total_label = wsregister_label(type_table, optarg);
+                break;
+            }
+            case 'r':{  /* labels an entire tuple and  matching members. */
+                tool_print("Registering label '%s' for aggregate status tuples.", optarg);
+                status_incr_label = wsregister_label(type_table, optarg);
+                break;
+            }
+            case 's':{  /* labels an entire tuple and  matching members. */
+                tool_print("Registering container label '%s' for status tuples.", optarg);
+                status_label = wsregister_label(type_table, optarg);
+                break;
+            }
             case 'F':{ /* load up the keyword file */
                 if (loadfile(type_table, optarg)) {
                     tool_print("reading input file %s\n", optarg);
@@ -627,6 +716,28 @@ int vectormatch_proc::cmd_options(
         }
     }
 
+
+    if(!status_label && (status_incr_label && status_total_label)) {
+        error_print("cannot have both incremental and aggregate status without specifying a status container label");
+        return -1;
+    }
+    stats_labels = {
+        wsregister_label(type_table, "EVENT_CNT")
+      , wsregister_label(type_table, "HIT_CNT")
+      , wsregister_label(type_table, "OUT_CNT")
+      , wsregister_label(type_table, "BYTE_CNT")
+      , wsregister_label(type_table, "START_TS")
+      , wsregister_label(type_table, "END_TS")
+      , wsregister_label(type_table, "INTERVAL")
+      , wsregister_label(type_table, "EVENT_RATE")
+      , wsregister_label(type_table, "BANDWIDTH")
+      , wsregister_label(type_table, "HW_OVERFLOW")
+      , wsregister_label(type_table, "QD_OVERFLOW")
+      , wsregister_label(type_table, "MAX_MATCHES")
+      , wsregister_label(type_table, "DEVICE_TEMP")
+    };
+    status_total = status_incremental = status_info::make_info();
+    
     if (term_groups.empty()) {
         tool_print("ERROR: -F <filename> option is required.");
         exit(-1);
@@ -861,12 +972,47 @@ proc_process_t vectormatch_proc::input_set(
         // Are we searching only on data associated with specific labels,
         // or anywhere in the tuple?
         if (!lset.len) {
-            return &vectormatch_proc::proc_process_allstr;  // look in all strings
+//            return &vectormatch_proc::proc_process_allstr;  // look in all strings
+            return [](void * vinstance,    /* the instance */
+             wsdata_t* input_data,  /* incoming tuple */
+                    ws_doutput_t * dout,    /* output channel */
+             int type_index)
+            {
+                auto proc = (vectormatch_proc*)vinstance;
+                return proc->process_allstr(input_data,dout,type_index);
+            };
         } else {
-            return &vectormatch_proc::proc_process_meta; // look only in the labels.
+            return [](void * vinstance,    /* the instance */
+             wsdata_t* input_data,  /* incoming tuple */
+                    ws_doutput_t * dout,    /* output channel */
+             int type_index)
+            {
+                auto proc = (vectormatch_proc*)vinstance;
+                return proc->process_meta(input_data,dout,type_index);
+            };
+//            return [](void *
+//            &vectormatch_proc::proc_process_meta; // look only in the labels.
         }
     }else if(wsdatatype_match(type_table,input_type, "FLUSH_TYPE")) {
-        return &vectormatch_proc::proc_process_flush;
+        if(wslabel_match(type_table, port, "STATUS")) {
+            return [](void * vinstance,    /* the instance */
+                wsdata_t* input_data,  /* incoming tuple */
+                    ws_doutput_t * dout,    /* output channel */
+                int type_index)
+            {
+                auto proc = (vectormatch_proc*)vinstance;
+                return proc->process_status(input_data,dout,type_index);
+            };
+        } else {
+            return [](void * vinstance,    /* the instance */
+                wsdata_t* input_data,  /* incoming tuple */
+                    ws_doutput_t * dout,    /* output channel */
+                int type_index)
+            {
+                auto proc = (vectormatch_proc*)vinstance;
+                return proc->process_flush(input_data,dout,type_index);
+            };
+        }
     }
     return nullptr;  // not matching expected type
 }
@@ -905,6 +1051,7 @@ void cleanup_cb(void *opaque)
  * return 1 if output is available
  * return 0 if not output
  *---------------------------------------------------------------------------*/
+#if 0
 /*static*/ int vectormatch_proc::proc_process_meta(void * vinstance,    /* the instance */
              wsdata_t* input_data,  /* incoming tuple */
                     ws_doutput_t * dout,    /* output channel */
@@ -928,6 +1075,68 @@ void cleanup_cb(void *opaque)
 {
     auto proc = (vectormatch_proc*)vinstance;
     return proc->process_flush(input_data,dout,type_index);
+}
+#endif
+
+int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
+{
+    auto tmp = status_incremental;
+    status_total += status_incremental;
+    status_incremental = status_info::make_info();
+
+    if(!status_label && !status_incr_label && !status_total_label)
+        return 0;
+
+    auto tdata = ws_get_outdata(outtype_tuple);
+
+    if(status_label)
+        wsdata_add_label(tdata, status_label);
+
+    auto fill_values = [&](wsdata_t *dst, const status_info & data, int64_t _end_ts) {
+        auto _start_ts = data.start_ts;
+        auto _interval = _end_ts - _start_ts;
+        auto _interval_d = _interval * 1e-9;
+        tuple_member_create_uint64(dst, data.meta_process_cnt,    stats_labels.event_cnt     );
+        tuple_member_create_uint64(dst, data.hit_cnt,             stats_labels.hit_cnt       );
+        tuple_member_create_uint64(dst, data.out_cnt,             stats_labels.out_cnt       );
+        tuple_member_create_uint64(dst, data.byte_cnt,            stats_labels.byte_cnt      );
+        tuple_member_create_uint64(dst, _start_ts,                stats_labels.start_ts      );
+        tuple_member_create_uint64(dst, _end_ts,                  stats_labels.end_ts        );
+        tuple_member_create_double(dst, _interval_d,              stats_labels.interval      );
+        if(_interval_d) {
+            tuple_member_create_double(dst, data.meta_process_cnt / _interval_d, stats_labels.event_rate);
+            tuple_member_create_double(dst, data.byte_cnt         / _interval_d, stats_labels.bandwidth);
+        } else {
+            tuple_member_create_double(dst, 0., stats_labels.event_rate);
+            tuple_member_create_double(dst, 0., stats_labels.bandwidth);
+        }
+        tuple_member_create_uint64(dst, data.hw_overflow,                stats_labels.hw_overflow);
+        tuple_member_create_uint64(dst, data.qd_overflow,                stats_labels.qd_overflow);
+        tuple_member_create_int   (dst, data.max_matches,                stats_labels.max_matches);
+        
+        tuple_member_create_double(dst, driver->die_temp(),             stats_labels.device_temp);
+    };
+    if(!status_label) {
+        if(status_incr_label && !status_total_label) {
+            wsdata_add_label(tdata, status_incr_label);
+            fill_values(tdata, tmp, status_incremental.start_ts);
+        } else if(status_total_label && !status_incr_label) {
+             wsdata_add_label(tdata, status_total_label);
+            fill_values(tdata, status_total, status_incremental.start_ts);
+           
+        }
+    } else {
+        if(status_incr_label) {
+            auto sdata = tuple_member_create_wsdata(tdata, dtype_tuple, status_incr_label);
+            fill_values(sdata, tmp, status_incremental.start_ts);
+        }
+        if(status_total_label) {
+            auto sdata = tuple_member_create_wsdata(tdata, dtype_tuple, status_total_label);
+            fill_values(sdata, status_total, status_incremental.start_ts);
+        }
+    }
+    ws_set_outdata(tdata, outtype_tuple, dout);
+    return 1;
 }
 int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
@@ -965,14 +1174,26 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
                 break;
             found = found || qd.nmatches;
             if(qd.nmatches && !got_match) {
-                hits++;
+                status_incremental.hit_cnt++;
                 got_match = true;
             }
-            max_status = std::max<int>(max_status,qd.nmatches);
+            status_incremental.max_matches = std::max<int>(status_incremental.max_matches,qd.nmatches);
             if(qd.hw_overflow)
-                hw_overflow++;
+                status_incremental.hw_overflow++;
             if(qd.qd_overflow)
-                qd_overflow++;
+                status_incremental.qd_overflow++;
+            {
+                auto member = qd.member_data;
+                auto len    = size_t{};
+                if(member->dtype == dtype_binary) {
+                    auto wsb = (wsdt_binary_t*)member->data;
+                    len = wsb->len;
+                }else if(member->dtype == dtype_string) {
+                    auto wss = (wsdt_string_t*)member->data;
+                    len = wss->len;
+                }
+                status_incremental.byte_cnt+= len;
+            }
             for(auto i = 0; i < std::min(qd.capacity,qd.nmatches); ++i) {
                 auto mval = qd.matches[i];
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
@@ -1003,7 +1224,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
                     }
                     if(got_match || pass_all || do_tag[qd.type_index]) {
                         ws_set_outdata(qd.input_data, outtype_tuple, dout);
-                        ++outcnt;
+                        ++status_incremental.out_cnt;
                     }
                     wsdata_delete(qd.input_data);
                 }
@@ -1016,7 +1237,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
 }
 int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
-    meta_process_cnt++;
+    status_incremental.meta_process_cnt++;
     wsdata_t ** members = nullptr;
     auto members_len = 0;
     auto submitted = false;
@@ -1091,7 +1312,7 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
 //    npu_client_flush(client);
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
-      ++outcnt;
+      ++status_incremental.out_cnt;
     }
     return process_common(input_data,dout,type_index);
 }
@@ -1113,7 +1334,7 @@ int vectormatch_proc::process_allstr(
 {
 
 
-    meta_process_cnt++;
+    status_incremental.meta_process_cnt++;
     auto submitted = false;
     /* lset - the list of labels we will be searching over.
     * Iterate over these labels and call match on each of them */
@@ -1184,7 +1405,7 @@ int vectormatch_proc::process_allstr(
 //    npu_client_flush(client);
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
-      ++outcnt;
+      ++status_incremental.out_cnt;
     }
     return process_common(input_data,dout,type_index);
 }
