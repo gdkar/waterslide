@@ -194,7 +194,7 @@ static npu_registry npu_reg{};
  *---------------------------------------------------------------------------*/
 
 extern "C" const char proc_name[]        = PROC_NAME;
-extern "C" const char proc_version[]     = "0.1.6";
+extern "C" const char proc_version[]     = "0.1.7";
 extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
@@ -258,7 +258,7 @@ extern "C" const proc_option_t proc_opts[] = {
     {'L',"","",
     "common label to affix to matched tuple member",0,0},
     {'D',"","device",
-    "device file to use.",0,0},
+    "device file to use.",0,1},
     {'E',"","expression",
     "provide a pcre expression to match against..",1,0},
     {'B',"","binary",
@@ -474,7 +474,7 @@ struct vectormatch_proc {
     bool pass_all{}; /* 1 if we should labels matched members*/
     bool single_stream{};
     bool thread_running{};
-    std::string device_name = "/dev/lrl_npu0";
+    std::string device_name = {};
     int         chain_index = -1;
    ~vectormatch_proc();
     int loadfile(void *type_table, const char *filename);
@@ -715,7 +715,10 @@ int vectormatch_proc::cmd_options(
             }
         }
     }
-
+    if(device_name.empty()) {
+        error_print("device name is required");
+        return 0;
+    }
 
     if(!status_label && (status_incr_label && status_total_label)) {
         error_print("cannot have both incremental and aggregate status without specifying a status container label");
