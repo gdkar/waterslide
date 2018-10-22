@@ -194,7 +194,7 @@ static npu_registry npu_reg{};
  *---------------------------------------------------------------------------*/
 
 extern "C" const char proc_name[]        = PROC_NAME;
-extern "C" const char proc_version[]     = "0.1.7";
+extern "C" const char proc_version[]     = "0.1.6";
 extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
@@ -258,7 +258,7 @@ extern "C" const proc_option_t proc_opts[] = {
     {'L',"","",
     "common label to affix to matched tuple member",0,0},
     {'D',"","device",
-    "device file to use.",0,1},
+    "device file to use.",0,0},
     {'E',"","expression",
     "provide a pcre expression to match against..",1,0},
     {'B',"","binary",
@@ -442,6 +442,16 @@ struct vectormatch_proc {
         wslabel_t *max_matches;
         wslabel_t *device_temp;
     };
+    bool m_started{false};
+
+    void check_started()
+    {
+        if(m_started)
+            return;
+        status_total = status_info::make_info();
+        status_incremental = status_total;
+        m_started = true;
+    }
     status_labels stats_labels = {nullptr};
     status_info status_total{};
     status_info status_incremental{};
@@ -474,7 +484,7 @@ struct vectormatch_proc {
     bool pass_all{}; /* 1 if we should labels matched members*/
     bool single_stream{};
     bool thread_running{};
-    std::string device_name = {};
+    std::string device_name = "/dev/lrl_npu0";
     int         chain_index = -1;
    ~vectormatch_proc();
     int loadfile(void *type_table, const char *filename);
@@ -715,10 +725,7 @@ int vectormatch_proc::cmd_options(
             }
         }
     }
-    if(device_name.empty()) {
-        error_print("device name is required");
-        return 0;
-    }
+
 
     if(!status_label && (status_incr_label && status_total_label)) {
         error_print("cannot have both incremental and aggregate status without specifying a status container label");
@@ -1054,32 +1061,6 @@ void cleanup_cb(void *opaque)
  * return 1 if output is available
  * return 0 if not output
  *---------------------------------------------------------------------------*/
-#if 0
-/*static*/ int vectormatch_proc::proc_process_meta(void * vinstance,    /* the instance */
-             wsdata_t* input_data,  /* incoming tuple */
-                    ws_doutput_t * dout,    /* output channel */
-             int type_index)
-{
-    auto proc = (vectormatch_proc*)vinstance;
-    return proc->process_meta(input_data,dout,type_index);
-}
-/*static*/ int vectormatch_proc::proc_process_allstr(void * vinstance,    /* the instance */
-             wsdata_t* input_data,  /* incoming tuple */
-                    ws_doutput_t * dout,    /* output channel */
-             int type_index)
-{
-    auto proc = (vectormatch_proc*)vinstance;
-    return proc->process_allstr(input_data,dout,type_index);
-}
-/*static*/ int vectormatch_proc::proc_process_flush(void * vinstance,    /* the instance */
-             wsdata_t* input_data,  /* incoming tuple */
-                    ws_doutput_t * dout,    /* output channel */
-             int type_index)
-{
-    auto proc = (vectormatch_proc*)vinstance;
-    return proc->process_flush(input_data,dout,type_index);
-}
-#endif
 
 int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
@@ -1143,6 +1124,7 @@ int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, i
 }
 int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
+    check_started();
     if(single_stream) {
         if(cb_queue.empty() || cb_queue.back()->full()) {
             cb_queue.emplace_back(new callback_batch());
@@ -1240,6 +1222,7 @@ int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, i
 }
 int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
+    check_started();
     status_incremental.meta_process_cnt++;
     wsdata_t ** members = nullptr;
     auto members_len = 0;
@@ -1336,6 +1319,7 @@ int vectormatch_proc::process_allstr(
                int type_index)
 {
 
+    check_started();
 
     status_incremental.meta_process_cnt++;
     auto submitted = false;
