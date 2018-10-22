@@ -498,11 +498,6 @@ struct vectormatch_proc {
                 const char *restr, const char *binstr, size_t matchlen,
                 const char *labelstr);
 
-/*    static int proc_process_meta(void *, wsdata_t*, ws_doutput_t*, int);
-    static int proc_process_allstr(void *, wsdata_t*, ws_doutput_t*, int);
-    static int proc_process_flush(void *, wsdata_t*, ws_doutput_t*, int);
-    static int proc_process_status(void *, wsdata_t*,ws_doutput_t*,int);
-*/
     int process_meta(wsdata_t*, ws_doutput_t*, int);
     int process_allstr(wsdata_t*, ws_doutput_t*, int);
     int process_flush(wsdata_t*, ws_doutput_t*, int);
