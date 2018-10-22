@@ -277,7 +277,7 @@ extern "C" const proc_option_t proc_opts[] = {
     "",0,0}
 };
 extern "C" const char proc_nonswitch_opts[]               = "LABEL of string member to match";
-extern "C" const char *const proc_input_types[]           = {"tuple","flush", nullptr};  //removed "npacket"
+extern "C" const char *const proc_input_types[]           = {"tuple","flush", "monitor",nullptr};  //removed "npacket"
 extern "C" const char *const proc_output_types[]          = {"tuple", nullptr}; //removed "npacket"
 extern "C" const char *const proc_tuple_member_labels[]    = {NULL};
 
@@ -498,11 +498,12 @@ struct vectormatch_proc {
                 const char *restr, const char *binstr, size_t matchlen,
                 const char *labelstr);
 
-    int process_meta(wsdata_t*, ws_doutput_t*, int);
-    int process_allstr(wsdata_t*, ws_doutput_t*, int);
-    int process_flush(wsdata_t*, ws_doutput_t*, int);
-    int process_status(wsdata_t*, ws_doutput_t*, int);
-    int process_common(wsdata_t*, ws_doutput_t*, int);
+    int process_meta    (wsdata_t*, ws_doutput_t*, int);
+    int process_allstr  (wsdata_t*, ws_doutput_t*, int);
+    int process_flush   (wsdata_t*, ws_doutput_t*, int);
+    int process_status  (wsdata_t*, ws_doutput_t*, int);
+    int process_monitor (wsdata_t*, ws_doutput_t*, int);
+    int process_common  (wsdata_t*, ws_doutput_t*, int);
 
     proc_process_t input_set(
         wsdatatype_t * input_type
@@ -1018,6 +1019,15 @@ proc_process_t vectormatch_proc::input_set(
                 return proc->process_flush(input_data,dout,type_index);
             };
         }
+    }else if(wsdatatype_match(type_table,input_type, "MONITOR_TYPE")) {
+            return [](void * vinstance,    /* the instance */
+            wsdata_t* input_data,  /* incoming tuple */
+                ws_doutput_t * dout,    /* output channel */
+                int type_index)
+            {
+                auto proc = (vectormatch_proc*)vinstance;
+                return proc->process_monitor(input_data,dout,type_index);
+            };       
     }
     return nullptr;  // not matching expected type
 }
@@ -1056,6 +1066,68 @@ void cleanup_cb(void *opaque)
  * return 1 if output is available
  * return 0 if not output
  *---------------------------------------------------------------------------*/
+int vectormatch_proc::process_monitor(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
+{
+    auto tmp = status_incremental;
+    status_total += status_incremental;
+    status_incremental = status_info::make_info();
+
+    wsdata_t *mtdata = wsdt_monitor_get_tuple(input_data);
+
+    if(!status_label && !status_incr_label && !status_total_label)
+        return 0;
+
+    auto tdata = (status_label ? tuple_member_create_wsdata(mtdata,dtype_tuple,status_label) : mtdata);
+
+    if(tdata) {
+        auto fill_values = [&](wsdata_t *dst, const status_info & data, int64_t _end_ts) {
+            auto _start_ts = data.start_ts;
+            auto _interval = _end_ts - _start_ts;
+            auto _interval_d = _interval * 1e-9;
+            tuple_member_create_uint64(dst, data.meta_process_cnt,    stats_labels.event_cnt     );
+            tuple_member_create_uint64(dst, data.hit_cnt,             stats_labels.hit_cnt       );
+            tuple_member_create_uint64(dst, data.out_cnt,             stats_labels.out_cnt       );
+            tuple_member_create_uint64(dst, data.byte_cnt,            stats_labels.byte_cnt      );
+            tuple_member_create_uint64(dst, _start_ts,                stats_labels.start_ts      );
+            tuple_member_create_uint64(dst, _end_ts,                  stats_labels.end_ts        );
+            tuple_member_create_double(dst, _interval_d,              stats_labels.interval      );
+            if(_interval_d) {
+                tuple_member_create_double(dst, data.meta_process_cnt / _interval_d, stats_labels.event_rate);
+                tuple_member_create_double(dst, data.byte_cnt         / _interval_d, stats_labels.bandwidth);
+            } else {
+                tuple_member_create_double(dst, 0., stats_labels.event_rate);
+                tuple_member_create_double(dst, 0., stats_labels.bandwidth);
+            }
+            tuple_member_create_uint64(dst, data.hw_overflow,                stats_labels.hw_overflow);
+            tuple_member_create_uint64(dst, data.qd_overflow,                stats_labels.qd_overflow);
+            tuple_member_create_int   (dst, data.max_matches,                stats_labels.max_matches);
+            
+            tuple_member_create_double(dst, driver->die_temp(),             stats_labels.device_temp);
+        };
+
+        if(!status_label) {
+            if(status_incr_label && !status_total_label) {
+                wsdata_add_label(tdata, status_incr_label);
+                fill_values(tdata, tmp, status_incremental.start_ts);
+            } else if(status_total_label && !status_incr_label) {
+                wsdata_add_label(tdata, status_total_label);
+                fill_values(tdata, status_total, status_incremental.start_ts);
+            
+            }
+        } else {
+            if(status_incr_label) {
+                auto sdata = tuple_member_create_wsdata(tdata, dtype_tuple, status_incr_label);
+                fill_values(sdata, tmp, status_incremental.start_ts);
+            }
+            if(status_total_label) {
+                auto sdata = tuple_member_create_wsdata(tdata, dtype_tuple, status_total_label);
+                fill_values(sdata, status_total, status_incremental.start_ts);
+            }
+        }
+    }
+    wsdt_monitor_set_visit(input_data);
+    return 0;
+}
 
 int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
@@ -1115,7 +1187,7 @@ int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, i
         }
     }
     ws_set_outdata(tdata, outtype_tuple, dout);
-    return 1;
+    return 0;
 }
 int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
