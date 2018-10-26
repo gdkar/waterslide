@@ -164,5 +164,5 @@ ifdef WS_PARALLEL
 endif
 
 CPPFLAGS = $(filter-out -std=gnu11, $(CFLAGS))
-CPPFLAGS += -std=gnu++11
+CPPFLAGS += -std=gnu++14
 

@@ -167,6 +167,15 @@ else
 proc_redis$(WS_SFX): proc_redis.c
 	@echo " not building $@, need libhiredis, set HASREDIS=1 to build"
 endif
+ifdef HASREDIS
+proc_redisstream$(WS_SFX): proc_redisstream.cc
+	$(SHOWFILE) 
+	$(CXX) $(CFLAGS) $< -o $@ -lhiredis $(LDFLAGS)
+	$(INSTALL) $@ $(WS_PROCS_DIR)
+else
+proc_redisstream$(WS_SFX): proc_redisstream.cc
+	@echo " not building $@, need libhiredis, set HASREDIS=1 to build"
+endif
 
 
 ifndef WS_PARALLEL
