@@ -49,6 +49,8 @@ proc_option_t proc_opts[]      =  {
      "probability with which each metadata independently continues",0,0},
      {'t',"","time",
      "sample every t seconds",0,0},
+     {'N',"","number",
+     "sample every N items."},
      //the following must be left as-is to signify the end of the array
      {' ',"","",
      "",0,0}
@@ -81,6 +83,9 @@ typedef struct _proc_instance_t {
      uint64_t outcnt;
 
      ws_outtype_t * outtype_meta[LOCAL_MAX_TYPES];
+     double heartbeat_f64;
+     uint64_t heartbeat_mod;
+     uint64_t next_count;
      int heartbeat_int;
      int fwdflush;
      uint32_t heartbeat_time;
@@ -96,11 +101,20 @@ static int proc_cmd_options(int argc, char ** argv,
      int op;
      double heartbeat=0.0;
 
-     while ((op = getopt(argc, argv, "p:t:F")) != EOF) {
+     while ((op = getopt(argc, argv, "N:p:t:F")) != EOF) {
           switch (op) {
           case 't':
                proc->heartbeat_time=atoi(optarg);
+               proc->heartbeat_int = 0;
+               proc->heartbeat_mod = 0;
                break;
+          case 'N':
+                proc->heartbeat_time= 0;
+                proc->heartbeat_int = 0;
+                proc->heartbeat_f64 = strtod(optarg,NULL);
+                proc->heartbeat_mod = (uint64_t)(1.0/proc->heartbeat_f64);
+               tool_print("setting heartbeat fraction %f %zu", proc->heartbeat_f64, proc->heartbeat_mod);
+                break;
           case 'p':
                heartbeat=strtod(optarg, NULL);
                set_heartbeat(proc, heartbeat);
@@ -130,6 +144,8 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
      *vinstance = proc;
 
      proc->heartbeat_time = 0;
+     proc->heartbeat_mod  = 0;
+     proc->heartbeat_f64  = 0;
      set_heartbeat(proc, 0.5);
 
      //read in command options
@@ -169,18 +185,24 @@ proc_process_t proc_input_set(void * vinstance, wsdatatype_t * meta_type,
 
 //return 0 if data should be dropped, return 1 if we have heartbeat
 static inline int check_heartbeat(proc_instance_t * proc) {
-     if(proc->heartbeat_time==0) {
+     if(proc->heartbeat_int) {
           if(rand() <= proc->heartbeat_int)
                return 1;
-     } else {
+     } else if(proc->heartbeat_time) {
           uint32_t t=time(NULL);
           if(t>=proc->nexttime) {
                proc->nexttime=t+proc->heartbeat_time;
                return 1;
           } else
                return 0;
+     } else if(proc->heartbeat_mod){
+        if(proc->next_count++ >= proc->heartbeat_mod) {
+            proc->next_count = 0;
+            return 1;
+        } else {
+            return 0;
+        }
      }
-
      return 0;
 }
 

@@ -121,7 +121,13 @@ struct proc_instance {
      uint64_t outcnt            {};
 
      ws_outtype_t * outtype_tuple{};
-     std::deque<std::string> filenames;
+     std::deque<std::string> devices{};
+     std::deque<std::string> filenames{};
+
+     int snaplen{65536};
+     int promisc{};
+     int to_ms  {50};
+
      FILE * in    {};
      pcap_ptr pcap;
      int used_glob{};
@@ -148,8 +154,20 @@ static int proc_cmd_options(int argc, char ** argv,
                              proc_instance * proc, void * type_table)
 {
      auto op = 0;
-     while ((op = getopt(argc, argv, "r:ismL:")) != EOF) {
+     while ((op = getopt(argc, argv, "d:N:PT:r:ismL:")) != EOF) {
         switch (op) {
+            case 'd':
+                proc->devices.emplace_back(optarg);
+                break;
+            case 'T':
+                proc->to_ms = atoi(optarg);
+                break;
+            case 'N':
+                proc->snaplen = atoi(optarg);
+                break;
+            case 'P':
+                proc->promisc = 1;
+                break;
             case 'i':
                 proc->stdin_data = true;
                 break;
@@ -224,6 +242,24 @@ static int read_names_glob(proc_instance *proc, const char *pattern)
      globfree(&globbuf);
      return count;
 }
+static int get_next_device(proc_instance *proc)
+{
+    if(proc->done)
+        return 0;
+    while(!proc->devices.empty()) {
+        auto _device = std::move(proc->devices.front());
+        proc->devices.pop_front();
+        char errbuf[PCAP_ERRBUF_SIZE] = {0,};
+        proc->pcap.reset(pcap_open_live(_device.c_str(),proc->snaplen, proc->promisc, proc->to_ms, errbuf));
+        if(proc->pcap) {
+            tool_print("opened device%s", errbuf);
+            return 1;
+        } else {
+            tool_print("failed to open device %s, %s", _device.c_str(),errbuf);
+        }
+    }
+    return 0;
+}
 static int get_next_file(proc_instance * proc)
 {
      if (proc->done)
@@ -231,6 +267,8 @@ static int get_next_file(proc_instance * proc)
 
      //close old capture if needed
      proc->pcap.reset();
+     if(get_next_device(proc))
+        return 1;
      while ( !proc->filenames.empty() ) {
           auto filename = proc->filenames.front();
           proc->filenames.pop_front();
@@ -296,11 +334,11 @@ int proc_init(wskid_t * kid, int argc, char ** argv, void ** vinstance, ws_sourc
                 , errbuf
                 );
         }
-    } else {
+    } else if (proc->devices.empty()) {
         /* Read from stdin if user didn't specify with -g */
         if ( !proc->used_glob && proc->filenames.empty() )
             read_names_file(proc);
-        if ( proc->filenames.empty() ) {
+        if ( proc->devices.empty() && proc->filenames.empty() ) {
             error_print("No files to process");
         }
     }
@@ -321,8 +359,8 @@ proc_process_t proc_input_set(void * vinstance, wsdatatype_t * input_type,
 static inline int read_next_record(proc_instance * proc, wsdata_t * tdata)
 {
     while(true) {
-        if (!proc->pcap) {
             // since we are closing the file, mark the format as unknown.
+        if(!proc->pcap) {
             if (proc->stdin_data)
                 return 0;
 
