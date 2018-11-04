@@ -1,0 +1,8 @@
+#pragma LRL divisor (MATCH) (LMATCH) 10000
+#pragma LRL threshold (MATCH) 1024
+"http"                    (MATCH)
+"HTTP"                    (MATCH)
+"htTp"                    (MATCH)
+"deflate"                    (MATCH)
+"sdch"                    (MATCH)
+"nginx"                    (MATCH)
