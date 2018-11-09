@@ -517,9 +517,11 @@ vectormatch_proc::~vectormatch_proc()
 {
     npu_client_flush(client);
     npu_client_free(&client);
-    driver->thread_stop();
-    driver->close();
-    driver.reset();
+    if(driver) {
+        driver->thread_stop();
+        driver->close();
+        driver.reset();
+    }
     while(!cb_queue.empty()) {
         if(cb_queue.front()->empty())
             cb_queue.pop_front();
@@ -1079,7 +1081,7 @@ int vectormatch_proc::process_monitor(wsdata_t *input_data, ws_doutput_t* dout, 
 
     auto tdata = (status_label ? tuple_member_create_wsdata(mtdata,dtype_tuple,status_label) : mtdata);
 
-    if(tdata) {
+    if(driver && tdata) {
         auto fill_values = [&](wsdata_t *dst, const status_info & data, int64_t _end_ts) {
             auto _start_ts = data.start_ts;
             auto _interval = _end_ts - _start_ts;
@@ -1135,7 +1137,7 @@ int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, i
     status_total += status_incremental;
     status_incremental = status_info::make_info();
 
-    if(!status_label && !status_incr_label && !status_total_label)
+    if(!driver || (!status_label && !status_incr_label && !status_total_label))
         return 0;
 
     auto tdata = ws_get_outdata(outtype_tuple);
