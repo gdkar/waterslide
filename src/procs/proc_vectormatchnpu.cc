@@ -194,7 +194,7 @@ static npu_registry npu_reg{};
  *---------------------------------------------------------------------------*/
 
 extern "C" const char proc_name[]        = PROC_NAME;
-extern "C" const char proc_version[]     = "0.1.6";
+extern "C" const char proc_version[]     = "0.1.7";
 extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
