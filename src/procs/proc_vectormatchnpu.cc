@@ -319,7 +319,7 @@ struct callback_data {
 };
 
 struct callback_batch {
-    static constexpr const size_t capacity = 63ul;
+    static constexpr const size_t capacity = 255ul;
     ptrdiff_t       rptr{0};
     ptrdiff_t       wptr{0};
     callback_data   data[capacity];
@@ -893,6 +893,8 @@ int vectormatch_proc::cmd_options(
           error_print("could not crete a client for holding reference to npuDriver");
           return 0;
      }
+     driver->set_block_size(1ul<<18);
+     driver->set_ep_spacing(1ul<<14);
      npu_driver_set_matches(driver.get(), status_size);
      if(npu_thread_start(driver.get()) != 0) {
           error_print("could not start DPU thread");
