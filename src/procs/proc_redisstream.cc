@@ -176,6 +176,9 @@ struct proc_redisstream {
 
      uint64_t    maxlen      {};
      std::string maxlen_str  {};
+     uint64_t    maxpipe     {};
+
+     uint64_t    pipe_count  {};
 
      wslabel_t *subtuple_label{};
      wslabel_set_t element_lset {};
@@ -191,14 +194,20 @@ struct proc_redisstream {
 //     wslabel_t * label_outvalue{};
 
 //     ws_outtype_t * outtype_tuple{};
+     ~proc_redisstream();
      int cmd_options(int argc, char ** argv, void * type_table);
+
+     void appendCommandArgv(int argc, const char * *argv, const size_t *argvlen);
+     int  drainReplies(int count);
+     std::pair<reply_ptr,int> getReply();
 int proc_xadd(wsdata_t * tuple,ws_doutput_t * dout, int type_index);
+int proc_flush(wsdata_t * tuple,ws_doutput_t * dout, int type_index);
 
 };
 
 int proc_redisstream::cmd_options(int argc, char ** argv, void * type_table) {
      int op;
-     while ((op = getopt(argc, argv, "P:S:E:H:M:h:p")) != EOF) {
+     while ((op = getopt(argc, argv, "P:S:E:H:M:B:h:p")) != EOF) {
           switch (op) {
           case 'P':
                stream_key = std::string{optarg};
@@ -219,6 +228,9 @@ int proc_redisstream::cmd_options(int argc, char ** argv, void * type_table) {
           case 'M':
                maxlen = atoi(optarg);
                maxlen_str = std::to_string(maxlen);
+               break;
+          case 'B':
+               maxpipe = atoi(optarg);
                break;
           case 'h':
                hostname = std::string(optarg);
@@ -282,8 +294,16 @@ proc_process_t proc_input_set(void * vinstance, wsdatatype_t * meta_type,
                               ws_outlist_t* olist, int type_index,
                               void * type_table) {
      dprint("input_set");
+    if(wsdatatype_match(type_table,meta_type,"FLUSH_TYPE")) {
+        return [](void * vinstance, wsdata_t * tuple,
+                        ws_doutput_t * dout, int type_index) {
+            return static_cast<proc_redisstream*>(vinstance)->proc_flush(tuple, dout, type_index);
+        };
+
+    }
+
      if (meta_type != dtype_tuple) {
-          dprint("not tuple");
+          dprint("not tuple or flush");
           return NULL;
      }
      return [](void * vinstance, wsdata_t * tuple,
@@ -329,6 +349,66 @@ struct avec {
         emplace_back(static_cast<const char*>(str[0]),M);
     }
 };
+
+void proc_redisstream::appendCommandArgv(int argc, const char **argv, const size_t *argvlen)
+{
+    if(rc) {
+        redisAppendCommandArgv(rc.get(),argc, argv, argvlen);
+        pipe_count++;
+        if(pipe_count > maxpipe)
+            drainReplies(pipe_count - maxpipe);
+    }
+}
+proc_redisstream::~proc_redisstream()
+{
+    if(rc) {
+        while(pipe_count) {
+            auto res = getReply();
+            if(res.first) {
+                pipe_count--;
+            } else {
+                auto err = res.second;
+                if(err == REDIS_ERR_EOF || err == REDIS_ERR_OTHER || err == REDIS_ERR_OTHER) {
+                    break;
+                }
+            }
+        }
+    }
+    drainReplies(pipe_count);
+}
+std::pair<reply_ptr,int> proc_redisstream::getReply()
+{
+    redisReply *reply = nullptr;
+    if(!rc) {
+        return { reply_ptr{}, REDIS_ERR_EOF};
+    }
+    if(redisGetReply(rc.get(), (void**)&reply) == REDIS_OK) {
+        return {reply_ptr{reply}, REDIS_OK};
+    } else {
+        return {reply_ptr{}, rc->err};
+    }
+}
+int proc_redisstream::drainReplies(int count)
+{
+    auto res = 0;
+    while(count--> 0) {
+        auto rep = getReply();;
+        auto & rp = rep.first;
+        auto & err = rep.second;
+        if(rp || err == REDIS_ERR_PROTOCOL) {
+            pipe_count--;
+            res++;
+        } else {
+            break;
+        }
+    }
+    return res;
+}
+int proc_redisstream::proc_flush(wsdata_t *ituple,ws_doutput_t *dout, int type_idex)
+{
+    drainReplies(pipe_count);
+    return 1;
+}
 int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_idex)
 {
     meta_process_cnt++;
@@ -377,8 +457,7 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
 /*            for(auto x = 0; x < args.size(); ++x) {
                 tool_print(" %s\n",args.argv[x]);
             }*/
-            auto reply = reply_ptr((redisReply*)redisCommandArgv(rc.get(),args.size(),&args.argv[0],&args.argvlen[0]));
-            dprint("got reply %d", reply->type);
+            appendCommandArgv(args.size(),&args.argv[0],&args.argvlen[0]);
             return 1;
         }
         return 0;
@@ -429,8 +508,7 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
             }
         }
         if(valid) {
-            auto reply = reply_ptr((redisReply*)redisCommandArgv(rc.get(),args.size(),&args.argv[0],&args.argvlen[0]));
-            tool_print("got reply %d", reply->type);
+            appendCommandArgv(args.size(),&args.argv[0],&args.argvlen[0]);
             return 1;
         }
     } else{
