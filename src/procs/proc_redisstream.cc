@@ -486,6 +486,20 @@ struct avec {
 
 void proc_redisstream::appendCommandArgv(int argc, const char **argv, const size_t *argvlen)
 {
+    if(!rc && !hostname.empty()) {
+        struct timeval timeout = { 1, 500000 }; // 1.5 seconds
+        auto c = redis_ptr(redisConnectWithTimeout(hostname.c_str(), port, timeout));
+        if (!c|| c->err) {
+            if (c) {
+                printf("Connection error: %s\n", c->errstr);
+            } else {
+                printf("Connection error: can't allocate redis context\n");
+                hostname.clear();
+            }
+        }
+        rc = std::move(c);
+        tool_print("got context");
+    }
     if(rc) {
         redisAppendCommandArgv(rc.get(),argc, argv, argvlen);
         pipe_count++;
@@ -501,10 +515,7 @@ proc_redisstream::~proc_redisstream()
             if(res.first) {
                 pipe_count--;
             } else {
-                auto err = res.second;
-                if(err == REDIS_ERR_EOF || err == REDIS_ERR_OTHER || err == REDIS_ERR_OTHER) {
-                    break;
-                }
+        break;
             }
         }
     }
@@ -525,15 +536,20 @@ std::pair<reply_ptr,int> proc_redisstream::getReply()
 int proc_redisstream::drainReplies(int count)
 {
     auto res = 0;
-    while(count--> 0) {
-        auto rep = getReply();;
-        auto & rp = rep.first;
-        auto & err = rep.second;
-        if(rp || err == REDIS_ERR_PROTOCOL) {
-            pipe_count--;
-            res++;
-        } else {
-            break;
+    if(rc) {
+        while(count--> 0) {
+            auto rep = getReply();;
+            auto & rp = rep.first;
+            auto & err = rep.second;
+            if(rp || err == REDIS_ERR_PROTOCOL) {
+                pipe_count--;
+                res++;
+            } else {
+                pipe_count=0;
+                if(redisReconnect(rc.get()) != REDIS_OK)
+                    rc.reset();
+                break;
+            }
         }
     }
     return res;
