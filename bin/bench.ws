@@ -1,12 +1,9 @@
 %thread(1) {
-#    pcap_in -d enp0s25 -d any -P -> $data_orig
     wsproto_in  -r /var/packets.mpproto -N "${TOTAL_MLEN}" -> $data_orig
-#    wsproto_in  -r /var/packets.mpproto -N "${TOTAL_MLEN}" -> $data_orig
 
     $data_orig | addlabelmember ITEM_NUMBER -c 0 | strlen CONTENT | calc '#TOTAL_LENGTH+=STRLEN;CONTENT_POSITION=#TOTAL_LENGTH;' -> $data_tagged
     $data_tagged| bundle -N 256 | workbalance -N 2 -J WCARDS -L CARD_ -> $data_in
     $data_orig | flush -N -t 4s -> $flush_var
-#    $data_in   | flush -N -C 64 -> $status_var
 }
 
 %thread(2){
@@ -36,6 +33,6 @@
     $unbundled_out | labelstat| print -VVT
     $unbundled_out | label MATCH | mklabelset CONTENT -S -L TAGS | removefromtuple CONTENT -> $exit
 
-    $flush_var, $exit | redisstream -M 1048576 -B 256 -P "${PREFIX}bench-stream"
-	$flush_var, $unpacked_stat | redisstream -M 65536 -B 16  -E CHAIN -H INCR_STATS -L INCREMENTAL -I MAX_MATCHES -I DEVICE_TEMP -I BANDWIDTH -I EVENT_CNT -I EVENT_RATE -I HIT_CNT -I INTERVAL -H TOTAL_STATS -L TOTAL -I EVENT_CNT -I HIT_CNT -I BANDWIDTH -I INTERVAL -I BYTE_CNT -I END_TS -P "${PREFIX}status-stream"
+    $flush_var, $exit | redisstream -M 1048576 -B 256 -P "${PREFIX}:alerts"
+	$flush_var, $unpacked_stat | redisstream -M 65536 -B 16  -E CHAIN -H INCR_STATS -L INCREMENTAL -I MAX_MATCHES -I DEVICE_TEMP -I BANDWIDTH -I EVENT_CNT -I EVENT_RATE -I HIT_CNT -I INTERVAL -H TOTAL_STATS -L TOTAL -I EVENT_CNT -I HIT_CNT -I BANDWIDTH -I INTERVAL -I BYTE_CNT -I END_TS -P "${PREFIX}:status"
 }
