@@ -127,6 +127,7 @@ char proc_nonswitch_opts[] = "";
 typedef struct _proc_instance_t {
      uint64_t meta_process_cnt;
      uint64_t badfile_cnt;
+     uint64_t total_mlen;
      uint64_t outcnt;
 
      ws_outtype_t * outtype_tuple;
@@ -148,6 +149,8 @@ typedef struct _proc_instance_t {
      wslabel_t * label_file;
      int pass_file_meta;
      int suppress_output;
+     int repeat_forever;
+     uint64_t repeat_until;
      uint8_t receivebinary;
 } proc_instance_t;
 
@@ -163,7 +166,7 @@ static int proc_cmd_options(int argc, char ** argv,
 
      int op;
 
-     while ((op = getopt(argc, argv, "ir:smB")) != EOF) {
+     while ((op = getopt(argc, argv, "ir:smBRN:")) != EOF) {
           switch (op) {
           case 'i':
                proc->stdin_data = 1;
@@ -181,6 +184,15 @@ static int proc_cmd_options(int argc, char ** argv,
                read_names_glob(proc, optarg);
                proc->used_glob++;
                break;
+           case 'R':
+               proc->repeat_forever = 1;
+               break;
+         case 'N': {
+               int64_t _until = atoll(optarg);
+               if(_until >= 0)
+                    proc->repeat_until = _until;
+         }
+                break;
           default:
                return 0;
           }
@@ -284,6 +296,9 @@ static int get_next_file(proc_instance_t * proc) {
                }
                if (!proc->suppress_output) {
                     tool_print("opened file %s", buf);
+               }
+               if(proc->repeat_forever || (proc->total_mlen < proc->repeat_until)) {
+                    proc->filenames->emplace_back(filename);
                }
                return 1;
           }
@@ -534,6 +549,7 @@ static inline int read_next_record(proc_instance_t * proc, wsdata_t * tdata) {
                     return fail_read(proc);
                }
           }
+          proc->total_mlen += mlen;
      }
      else if(proc->formatid == PBMETA_FORMAT_ID) {
           uint32_t mlen;
@@ -564,6 +580,7 @@ static inline int read_next_record(proc_instance_t * proc, wsdata_t * tdata) {
           if (!protobuf_tuple_readbuf(proc->pbuf, tdata, proc->buf, mlen)) {
                return fail_read(proc);
           }
+          proc->total_mlen += mlen;
      }
      else {
        tool_print("Unknown format id");
@@ -692,6 +709,7 @@ int proc_destroy(void * vinstance) {
      proc_instance_t * proc = (proc_instance_t*)vinstance;
      tool_print("meta_proc cnt %" PRIu64, proc->meta_process_cnt);
      tool_print("output cnt %" PRIu64, proc->outcnt);
+     tool_print("total_mlen %" PRIu64, proc->total_mlen);
      if (proc->badfile_cnt) {
           tool_print("badfile cnt %" PRIu64, proc->badfile_cnt);
      }
