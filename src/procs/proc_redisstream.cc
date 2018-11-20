@@ -40,6 +40,9 @@ SOFTWARE.
 #include <string>
 #include <numeric>
 #include <tuple>
+#include <deque>
+#include <vector>
+#include <array>
 
 #include <hiredis/hiredis.h>
 #include "waterslide.h"
@@ -90,10 +93,18 @@ extern "C" const proc_option_t proc_opts[]      =  {
      "option description", <allow multiple>, <required>*/
      {'P',"","stream",
       "stream key to write events into.",0,0},
-     {'K',"","stream key",
+     {'S',"","stream key",
       "label containing the stream key to write events into.",0,0},
-     {'T',"","sub tuple",
+     {'H',"","sub tuple",
       "label of the sub tuple to emit to the stream.",0,0},
+     {'E',"","sub element",
+      "label of the sub element to emit to the stream.",0,0},
+     {'L',"","subsest prefix / name",
+      "name or prefix to use for previous sub element / tuple",0,0},
+     {'I',"","include element of tuple",
+      "label to pick out of the proceeding sub tuple",0,0},
+     {'R',"","flatten",
+      "equivalent to -L '', only meaningful for sub tuples",0,0},
      {'h',"","hostname",
      "redis hostname (default to localhost)",0,0},
      {'p',"","port",
@@ -164,6 +175,12 @@ using redis_ptr = std::unique_ptr<redisContext, rc_del>;
 struct rr_del { void operator()(redisReply *rr){ if(rr) freeReplyObject(rr);}};
 using reply_ptr = std::unique_ptr<redisReply,rr_del>;
 
+struct sub_desc {
+    wslabel_nested_set_t nest{};
+    wslabel_set_t        lset{};
+    std::string          prefix{};
+    bool                 as_tuple{};
+};
 struct proc_redisstream {
      uint64_t meta_process_cnt{};
      uint64_t outcnt{};
@@ -180,20 +197,11 @@ struct proc_redisstream {
 
      uint64_t    pipe_count  {};
 
-     wslabel_t *subtuple_label{};
-     wslabel_set_t element_lset {};
+     std::deque<sub_desc> items{};
 
-     
      redis_ptr rc{};
-
-//   wslabel_nested_set_t nest_keys;
-//   wslabel_nested_set_t nest_values;
-
      time_t expire_sec{};
 
-//     wslabel_t * label_outvalue{};
-
-//     ws_outtype_t * outtype_tuple{};
      ~proc_redisstream();
      int cmd_options(int argc, char ** argv, void * type_table);
 
@@ -207,7 +215,7 @@ int proc_flush(wsdata_t * tuple,ws_doutput_t * dout, int type_index);
 
 int proc_redisstream::cmd_options(int argc, char ** argv, void * type_table) {
      int op;
-     while ((op = getopt(argc, argv, "P:S:E:H:M:B:h:p")) != EOF) {
+     while ((op = getopt(argc, argv, "P:S:E:H:M:B:h:p:L:R:I:")) != EOF) {
           switch (op) {
           case 'P':
                stream_key = std::string{optarg};
@@ -217,14 +225,55 @@ int proc_redisstream::cmd_options(int argc, char ** argv, void * type_table) {
                stream_label = wsregister_label(type_table,optarg);
                tool_print("publishing to stream found under label %s", stream_label->name);
                break;
-          case 'E':
-               wslabel_set_add(type_table, &element_lset,optarg);
-               tool_print("emitting the tuple found at %s", optarg);
+          case 'E': {
+               items.emplace_back();
+               auto &item = items.back();
+               wslabel_nested_search_build(type_table, &item.nest, optarg);
+               item.prefix = std::string{optarg};
+               item.as_tuple = false;
+               tool_print("emitting the element found at %s", optarg);
                break;
-          case 'H':
-               subtuple_label = wsregister_label(type_table,optarg);
-               tool_print("emitting the tuple found at %s", optarg);
+          }
+          case 'I': {
+                if(!items.empty()) {
+                    auto & item = items.back();
+                    if(!item.as_tuple)
+                        break;
+                    wslabel_set_add(type_table, &item.lset, optarg);
+                    tool_print("including label %s in group %s", optarg,item.prefix.c_str());
+                }
+                break;
+          }
+          case 'H': {
+               items.emplace_back();
+               auto &item = items.back();
+               wslabel_nested_search_build(type_table, &item.nest, optarg);
+               item.prefix = std::string{optarg} + ".";
+               item.as_tuple = true;
+               tool_print("emitting the subtuple found at %s", optarg);
                break;
+          }
+          case 'L': {
+                if(!items.empty()) {
+                    auto &item = items.back();
+                    item.prefix = std::string{optarg};
+                    if(item.prefix.size() && item.as_tuple) {
+                        if(item.prefix[item.prefix.size() - 1] != '.')
+                            item.prefix += ".";
+                    }
+                    tool_print("emitting the subtuple found at %s", optarg);
+                }
+                break;
+          }
+          case 'R' : {
+                if(!items.empty()) {
+                    auto &item = items.back();
+                    if(!item.as_tuple)
+                        break;
+                    item.prefix = std::string{};
+                }
+                break;
+          }
           case 'M':
                maxlen = atoi(optarg);
                maxlen_str = std::to_string(maxlen);
@@ -239,13 +288,21 @@ int proc_redisstream::cmd_options(int argc, char ** argv, void * type_table) {
                port = (uint16_t)atoi(optarg);
                break;
           default:
+                error_print("unrecognized options. %c\n",op);
                return 0;
           }
      }
      while (optind < argc) {
-          wslabel_set_add(type_table, &element_lset,argv[optind]);
-          tool_print("using key %s", argv[optind]);
-          optind++;
+        if(argv[optind] and *argv[optind]) {
+            auto _prefix = std::string{argv[optind]};
+            items.emplace_back();
+            auto &item = items.back();
+            wslabel_nested_search_build(type_table, &item.nest, _prefix.c_str());
+            item.prefix = _prefix;
+            item.as_tuple = false;
+            tool_print("emitting the element found at %s", _prefix.c_str());
+        }
+        optind++;
      }
      return 1;
 }
@@ -293,32 +350,109 @@ proc_process_t proc_input_set(void * vinstance, wsdatatype_t * meta_type,
                               wslabel_t * port,
                               ws_outlist_t* olist, int type_index,
                               void * type_table) {
-     dprint("input_set");
-    if(wsdatatype_match(type_table,meta_type,"FLUSH_TYPE")) {
-        return [](void * vinstance, wsdata_t * tuple,
-                        ws_doutput_t * dout, int type_index) {
-            return static_cast<proc_redisstream*>(vinstance)->proc_flush(tuple, dout, type_index);
-        };
+     tool_print("input_set");
+    if (wsdatatype_match(type_table, meta_type, "TUPLE_TYPE")){
 
-    }
-
-     if (meta_type != dtype_tuple) {
-          dprint("not tuple or flush");
-          return NULL;
-     }
+     tool_print("found xadd input");
      return [](void * vinstance, wsdata_t * tuple,
                       ws_doutput_t * dout, int type_index) {
         return static_cast<proc_redisstream*>(vinstance)->proc_xadd(
             tuple, dout, type_index);
      };
-     return nullptr; // a function pointer
+     }
+    else if(wsdatatype_match(type_table,meta_type,"FLUSH_TYPE")) {
+        dprint("found flush input");
+        return [](void * vinstance, wsdata_t * tuple,
+                        ws_doutput_t * dout, int type_index) {
+            return static_cast<proc_redisstream*>(vinstance)->proc_flush(tuple, dout, type_index);
+        };
+    } else {
+        dprint("not tuple or flush");
+        return nullptr; // a function pointer
+    }
 }
+static constexpr const char s_empty_{};
+template<int CAP = 8192>
+struct str_builder {
+    using pointer = char*;
+    using const_pointer = const char*;
+    std::array<char, CAP> data_{};
+    pointer               begin_{&data_[0]};
+    pointer               end_  {begin_};
+    pointer               limit_{begin_ + CAP};
+    static constexpr const_pointer empty_begin() { return &s_empty_;}
+    static constexpr const_pointer empty_end()   { return &s_empty_;}
+
+    size_t space() const      { return limit_ - end_; }
+    size_t capacity() const   { return CAP; }
+    const_pointer data() const{ return &data_[0];}
+    pointer data()            { return &data_[0];}
+    size_t fill() const       { return end_ - data();}
+    size_t size() const       { return end_ - begin_;}
+    std::pair<const_pointer, size_t> get() const
+    {
+        if(begin_ == end_) {
+            return { empty_begin(), 0ul};
+        } else {
+            return { static_cast<const_pointer>(begin_), end_ - begin_};
+        }
+    }
+    template<class It>
+    bool append(It from_, It to_)
+    {
+        if(from_ == to_ || !char(*from_))
+            return true;
+        auto tend = end_;
+        while(tend != limit_) {
+            if(from_ == to_|| !char(*from_)) {
+                end_ = tend;
+                return true;
+            } else {
+                *tend++ = char(*from_++);
+            }
+        }
+        if(from_ == to_ || !char(*from_))
+            return true;
+        return false;
+    }
+    bool append(const char *from, size_t len)
+    {
+        return append(from, from+len);
+    }
+    bool append(const char *from_)
+    {
+        if(!char(*from_))
+            return true;
+        auto tend = end_;
+        while(tend != limit_) {
+            if(auto c = char(*from_)) {
+                *tend++ = c;
+                from_++;
+            } else {
+                end_ = tend;
+                return true;
+            }
+        }
+        return false;
+    }
+    std::pair<const_pointer, size_t> finish()
+    {
+        auto res = get();
+        begin_ = end_;
+        return res;
+    }
+    void discard()
+    {
+        end_ = begin_;
+    }
+};
 template<int N = 128>
 struct avec {
     using ccpointer = const char*;
     int                         argc{};
-    std::array<ccpointer,N>  argv{};
+    std::array<ccpointer,N>     argv{};
     std::array<size_t,N>        argvlen{};
+
     int size() const { return argc;}
     static constexpr int capacity(){return N;}
     bool full() const { return size() == capacity();}
@@ -425,9 +559,9 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
             }
         }
     }
-    auto astuple = (wsdt_tuple_t*)ituple->data;
-    auto dump_tuple = [&](wsdt_tuple_t* astuple) {
+    if(items.size()) {
         auto args = avec<128>{};
+        auto sbuf = str_builder<8192>{};
         args.push_back("XADD");
         args.push_back(stream_);
         if(maxlen) {
@@ -436,73 +570,95 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
             args.push_back(maxlen_str);
         }
         args.push_back("*");
-
         auto valid = false;
-        for(size_t i = 0; i < astuple->len; ++i) {
-            auto m = astuple->member[i];
-            if(m->dtype != dtype_tuple && m->label_len) {
-                args.push_back(m->labels[0]->name);
-                if(m->dtype == dtype_binary) {
-                    auto bdata_ = (wsdt_binary_t*)skey->data;
-                    args.push_back(std::make_pair(bdata_->buf,bdata_->len));
-                } else {
-                    auto tmp = std::pair<char*,int>{};
-                    dtype_string_buffer(m, &tmp.first, &tmp.second);
-                    args.push_back(tmp);
-                }
-                valid = true;
-            }
-        }
-        if(valid) {
-/*            for(auto x = 0; x < args.size(); ++x) {
-                tool_print(" %s\n",args.argv[x]);
-            }*/
-            appendCommandArgv(args.size(),&args.argv[0],&args.argvlen[0]);
-            return 1;
-        }
-        return 0;
-    };
-    if(subtuple_label) {
-        wsdata_t**mset{};
-        int       mlen{};
-        if(tuple_find_label(ituple,subtuple_label,&mlen,&mset)) {
-            for(int i = 0; i < mlen; ++i) {
-                auto m = mset[i];
-                if(m->dtype == dtype_tuple) {
-                    if(dump_tuple((wsdt_tuple_t*)m->data))
+        for(auto && item : items) {
+            wsdata_t *m= NULL;
+            if(!item.as_tuple) {
+                tuple_nested_search(ituple,
+                    &item.nest,
+                    [](void *vproc, void *vret, wsdata_t *tdata, wsdata_t *member) -> int{
+                        wsdata_t **wret = (wsdata_t **)vret;
+                        if(!wret|| *wret)
+                            return 0;
+                        *wret = member;
                         return 1;
+                    },this, &m);
+                if(m) {
+                    auto tmp = std::pair<char*,int>{};
+                    if(m->dtype == dtype_binary) {
+                        auto bdata_ = (wsdt_binary_t*)m->data;
+                        tmp = std::make_pair(bdata_->buf, bdata_->len);
+                    } else {
+                        dtype_string_buffer(m, &tmp.first, &tmp.second);
+                    }
+                    if(!tmp.first || !tmp.second)
+                        continue;
+                    args.push_back(item.prefix);
+                    args.push_back(tmp);
+                    valid = true;
                 }
-            }
-        }
-    } else if(element_lset.len) {
-        auto args = avec<128>{};
-        args.push_back("XADD");
-        args.push_back(stream_);
-        if(maxlen) {
-            args.push_back("MAXLEN");
-            args.push_back("~");
-            args.push_back(maxlen_str);
-        }
-        args.push_back("*");
-
-        auto valid = false;
-        wsdata_t**mset{};
-        int       mlen{};
-        for(int i = 0; i < element_lset.len; ++i) {
-            if(tuple_find_label(ituple,element_lset.labels[i],&mlen,&mset)) {
-                for(int j = 0; j < mlen; ++j) {
-                    auto m = mset[j];
-                    if(m->dtype != dtype_tuple && m->label_len) {
-                        args.push_back(element_lset.labels[i]->name);
-                        if(m->dtype == dtype_binary) {
-                            auto bdata_ = (wsdt_binary_t*)skey->data;
-                            args.push_back(std::make_pair(bdata_->buf,bdata_->len));
-                        } else {
-                            auto tmp = std::pair<char*,int>{};
-                            dtype_string_buffer(m, &tmp.first, &tmp.second);
-                            args.push_back(tmp);
+            } else {
+                tuple_nested_search(ituple,
+                    &item.nest,
+                    [](void *self, void *vret, wsdata_t *tdata, wsdata_t *member) -> int{
+                        wsdata_t **wret = (wsdata_t **)vret;
+                        if(!wret|| *wret)
+                            return 0;
+                        if(member->dtype == dtype_tuple) {
+                            auto s = (wsdt_tuple_t*)member->data;
+                            if(s->len)
+                                *wret = member;
                         }
-                        valid = true;
+                        return 1;
+                    },this, &m);
+                if(m && m->dtype == dtype_tuple) {
+                    auto add_member = [&](wsdata_t * msub, const char*_lab) {
+                        if(!_lab && msub->label_len)
+                            _lab = msub->labels[0]->name;
+                        if(_lab) {
+                            auto tmp = std::pair<char*,int>{};
+                            if(msub->dtype == dtype_binary) {
+                                auto bdata_ = (wsdt_binary_t*)msub->data;
+                                tmp = std::make_pair(bdata_->buf, bdata_->len);
+                            } else {
+                                dtype_string_buffer(msub, &tmp.first, &tmp.second);
+                            }
+                            if(!tmp.first || !tmp.second)
+                                return false; 
+                            if(item.prefix.size()) {
+                                if(!sbuf.append(item.prefix.data(),item.prefix.size())
+                                || !sbuf.append(_lab)) {
+                                    sbuf.discard();
+                                    return false;
+                                }
+                                args.push_back(sbuf.finish());
+                            } else {
+                                args.push_back(_lab);
+                            }
+                            args.push_back(tmp);
+                            valid = true;
+                            return true;
+                        }
+                        return false;
+                    };
+                    if(item.lset.len) {
+                        auto iter = tuple_labelset_iter_t{};
+                        tuple_init_labelset_iter(&iter, m, &item.lset);
+                        auto _fid = 0;
+                        auto _flabel = static_cast<wslabel_t*>(nullptr);
+                        auto _fmember= static_cast<wsdata_t*>(nullptr);
+                        while(tuple_search_labelset(&iter, &_fmember, &_flabel, &_fid)) {
+                            if(!add_member(_fmember, _flabel->name))
+                                continue;
+                            iter.mlen = 0;
+                            iter.labelpos++;
+                        }
+                    } else {
+                        auto s = (wsdt_tuple_t*)m->data;
+                        auto subs = s->member;
+                        auto nsub = s->len;
+                        for(size_t i = 0; i < nsub; ++i)
+                            add_member(subs[i], nullptr);
                     }
                 }
             }
@@ -511,9 +667,51 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
             appendCommandArgv(args.size(),&args.argv[0],&args.argvlen[0]);
             return 1;
         }
-    } else{
-        if(dump_tuple(astuple))
+    } else {
+    auto astuple = (wsdt_tuple_t*)ituple->data;
+    auto args = avec<128>{};
+    args.push_back("XADD");
+    args.push_back(stream_);
+    if(maxlen) {
+        args.push_back("MAXLEN");
+        args.push_back("~");
+        args.push_back(maxlen_str);
+    }
+    args.push_back("*");
+    auto valid = false;
+
+    /*    auto dump_tuple = [&](wsdt_tuple_t* astuple) {
+            args.push_back("XADD");
+            args.push_back(stream_);
+            if(maxlen) {
+                args.push_back("MAXLEN");
+                args.push_back("~");
+                args.push_back(maxlen_str);
+            }
+            args.push_back("*");
+
+            auto valid = false;*/
+        for(size_t i = 0; i < astuple->len; ++i) {
+            auto m = astuple->member[i];
+            if(m->label_len) {
+                auto tmp = std::pair<char*,int>{};
+                if(m->dtype == dtype_binary) {
+                    auto bdata_ = (wsdt_binary_t*)m->data;
+                    tmp = std::make_pair(bdata_->buf, bdata_->len);
+                } else {
+                    dtype_string_buffer(m, &tmp.first, &tmp.second);
+                }
+                if(!tmp.first || !tmp.second)
+                    continue;
+                args.push_back(m->labels[0]->name);
+                args.push_back(tmp);
+                valid = true;
+            }
+        }
+        if(valid) {
+            appendCommandArgv(args.size(),&args.argv[0],&args.argvlen[0]);
             return 1;
+        }
     }
     return 1;
 }
