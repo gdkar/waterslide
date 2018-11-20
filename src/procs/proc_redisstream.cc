@@ -356,7 +356,7 @@ void proc_redisstream::appendCommandArgv(int argc, const char **argv, const size
         redisAppendCommandArgv(rc.get(),argc, argv, argvlen);
         pipe_count++;
         if(pipe_count > maxpipe)
-            drainReplies(pipe_count - maxpipe);
+            drainReplies(pipe_count - maxpipe + ( maxpipe >> 4));
     }
 }
 proc_redisstream::~proc_redisstream()
