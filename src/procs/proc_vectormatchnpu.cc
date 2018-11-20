@@ -290,6 +290,7 @@ extern "C" const proc_port_t proc_input_ports[] = {
     {"none","pass if match"},
     {"TAG","pass all, label tuple if match"},
     {"STATUS","pass performance and device status"},
+    {"SYNC","flush, and synchronize the device queue ( wait for all outstanding tasks to complete )"},
     {nullptr, nullptr}
 };
 #endif //MP_DOCS
@@ -1013,6 +1014,19 @@ proc_process_t vectormatch_proc::input_set(
                 auto proc = (vectormatch_proc*)vinstance;
                 return proc->process_status(input_data,dout,type_index);
             };
+        } else if(wslabel_match(type_table,port,"SYNC")){
+            return [](void * vinstance,    /* the instance */
+                wsdata_t* input_data,  /* incoming tuple */
+                    ws_doutput_t * dout,    /* output channel */
+                int type_index)
+            {
+                auto proc = (vectormatch_proc*)vinstance;
+                auto res = proc->process_flush(input_data,dout,type_index);
+                while(!proc->cb_queue.empty())
+                    res = res || proc->process_common(input_data,dout,type_index);
+                return res;
+            };
+
         } else {
             return [](void * vinstance,    /* the instance */
                 wsdata_t* input_data,  /* incoming tuple */
@@ -1218,6 +1232,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
         npu_client_free(&client);
         npu_thread_stop(driver.get());
     }
+//    return 
     return process_common(input_data,dout,type_index);
 }
 int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* dout, int /*type_index*/)
