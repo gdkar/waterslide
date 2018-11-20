@@ -205,6 +205,7 @@ struct proc_redisstream {
      ~proc_redisstream();
      int cmd_options(int argc, char ** argv, void * type_table);
 
+     bool connect();
      void appendCommandArgv(int argc, const char * *argv, const size_t *argvlen);
      int  drainReplies(int count);
      std::pair<reply_ptr,int> getReply();
@@ -486,40 +487,16 @@ struct avec {
 
 void proc_redisstream::appendCommandArgv(int argc, const char **argv, const size_t *argvlen)
 {
-    if(!rc && !hostname.empty()) {
-        struct timeval timeout = { 1, 500000 }; // 1.5 seconds
-        auto c = redis_ptr(redisConnectWithTimeout(hostname.c_str(), port, timeout));
-        if (!c|| c->err) {
-            if (c) {
-                printf("Connection error: %s\n", c->errstr);
-            } else {
-                printf("Connection error: can't allocate redis context\n");
-                hostname.clear();
-            }
-        }
-        rc = std::move(c);
-        tool_print("got context");
-    }
-    if(rc) {
-        redisAppendCommandArgv(rc.get(),argc, argv, argvlen);
-        pipe_count++;
-        if(pipe_count > maxpipe)
-            drainReplies(pipe_count - maxpipe + ( maxpipe >> 4));
-    }
+    if(!connect())
+        return;
+    redisAppendCommandArgv(rc.get(),argc, argv, argvlen);
+    pipe_count++;
+    if(pipe_count > maxpipe)
+        drainReplies(pipe_count - maxpipe + ( maxpipe >> 4));
 }
 proc_redisstream::~proc_redisstream()
 {
-    if(rc) {
-        while(pipe_count) {
-            auto res = getReply();
-            if(res.first) {
-                pipe_count--;
-            } else {
-        break;
-            }
-        }
-    }
-    drainReplies(pipe_count);
+    while(rc && pipe_count && (drainReplies(pipe_count)> 0)){}
 }
 std::pair<reply_ptr,int> proc_redisstream::getReply()
 {
@@ -533,40 +510,70 @@ std::pair<reply_ptr,int> proc_redisstream::getReply()
         return {reply_ptr{}, rc->err};
     }
 }
+bool proc_redisstream::connect()
+{
+    if(rc && (!(rc->flags & REDIS_CONNECTED) || rc->err)) {
+        pipe_count=0;
+        if(redisReconnect(rc.get()) != REDIS_OK) {
+            rc.reset();
+            error_print("Connection has died and could not be restored.");
+        }
+    }
+    if(!rc) {
+        pipe_count=0;
+        if(!hostname.size())
+            return false;
+        struct timeval timeout = { 1, 500000 }; // 1.5 seconds
+        auto c = redis_ptr(redisConnectWithTimeout(hostname.c_str(), port, timeout));
+        if (!c|| c->err) {
+            if (c) {
+                error_print("Connection error: %s\n", c->errstr);
+            } else {
+                error_print("Connection error: can't allocate redis context\n");
+            }
+            hostname.clear();
+            return false;
+        }
+        rc = std::move(c);
+        tool_print("got context");
+        return true;
+    }
+    return (rc && (rc->flags&REDIS_CONNECTED) && !(rc->err));
+}
 int proc_redisstream::drainReplies(int count)
 {
     auto res = 0;
-    if(rc) {
-        while(count--> 0) {
-            auto rep = getReply();;
-            auto & rp = rep.first;
-            auto & err = rep.second;
-            if(rp || err == REDIS_ERR_PROTOCOL) {
-                pipe_count--;
-                res++;
-            } else {
-                pipe_count=0;
-                if(redisReconnect(rc.get()) != REDIS_OK)
-                    rc.reset();
-                break;
-            }
+    while(rc && (count--> 0) && pipe_count) {
+        auto rep = getReply();;
+        auto & rp = rep.first;
+        auto & err = rep.second;
+        if(rp) {
+            pipe_count--;
+            res++;
+        } else {
+            return -err;
         }
     }
+    if(!rc)
+        pipe_count = 0;
     return res;
 }
 int proc_redisstream::proc_flush(wsdata_t *ituple,ws_doutput_t *dout, int type_idex)
 {
-    drainReplies(pipe_count);
+    if(drainReplies(pipe_count) < 0)
+        return 1;
     return 1;
 }
 int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_idex)
 {
     meta_process_cnt++;
 
-    wsdata_t *skey{};
+    if(!connect())
+        return 0;
+
     auto stream_ = std::make_pair<char*,int>(&stream_key[0],int(stream_key.size()));
     if(stream_label) {
-        if((skey = tuple_find_single_label(ituple, stream_label))) {
+        if(auto skey = tuple_find_single_label(ituple, stream_label)) {
             if(skey->dtype == dtype_binary){
                 auto bdata_ = (wsdt_binary_t*)skey->data;
                 stream_ = std::make_pair(bdata_->buf,bdata_->len);
@@ -684,29 +691,17 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
             return 1;
         }
     } else {
-    auto astuple = (wsdt_tuple_t*)ituple->data;
-    auto args = avec<128>{};
-    args.push_back("XADD");
-    args.push_back(stream_);
-    if(maxlen) {
-        args.push_back("MAXLEN");
-        args.push_back("~");
-        args.push_back(maxlen_str);
-    }
-    args.push_back("*");
-    auto valid = false;
-
-    /*    auto dump_tuple = [&](wsdt_tuple_t* astuple) {
-            args.push_back("XADD");
-            args.push_back(stream_);
-            if(maxlen) {
-                args.push_back("MAXLEN");
-                args.push_back("~");
-                args.push_back(maxlen_str);
-            }
-            args.push_back("*");
-
-            auto valid = false;*/
+        auto astuple = (wsdt_tuple_t*)ituple->data;
+        auto args = avec<128>{};
+        args.push_back("XADD");
+        args.push_back(stream_);
+        if(maxlen) {
+            args.push_back("MAXLEN");
+            args.push_back("~");
+            args.push_back(maxlen_str);
+        }
+        args.push_back("*");
+        auto valid = false;
         for(size_t i = 0; i < astuple->len; ++i) {
             auto m = astuple->member[i];
             if(m->label_len) {
@@ -731,240 +726,7 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
     }
     return 1;
 }
-//// proc processing function assigned to a specific data type in proc_io_init
-//return 1 if output is available
-// return 0 if not output
-/*static int proc_get(void * vinstance, wsdata_t * tuple,
-                      ws_doutput_t * dout, int type_index) {
-
-     dprint("proc_get");
-     proc_instance_t * proc = (proc_instance_t*)vinstance;
-     proc->meta_process_cnt++;
-
-     dprint("search keys");
-     tuple_nested_search(tuple, &proc->nest_keys,
-                         nest_search_callback_get,
-                         proc, NULL);
-     
-     ws_set_outdata(tuple, proc->outtype_tuple, dout);
-
-     //always return 1 since we don't know if table will flush old data
-     return 1;
-}
-
-static int proc_rsubscribe(void * vinstance, wsdata_t * tuple,
-                      ws_doutput_t * dout, int type_index) {
-     
-     proc_instance_t * proc = (proc_instance_t*)vinstance;
-     redisReply *reply = NULL;
-
-     dprint("attempting to get subscribe reply");
-     if (redisGetReply(proc->rc,(void**)&reply) != REDIS_OK) {
-          dprint("got invalid reply");
-          return 1;
-     }
-     
-     dprint("got reply %d", reply->type);
-     if ((reply->type == REDIS_REPLY_STRING) && reply->len && reply->str) {
-          dprint("got reply string");
-          tuple_dupe_binary(tuple, proc->label_outvalue, reply->str, reply->len);
-          ws_set_outdata(tuple, proc->outtype_tuple, dout);
-     }
-     else if (reply->type == REDIS_REPLY_ARRAY) {
-          if (reply->elements == 3) {
-               redisReply *r = reply->element[2];
-               if ((r->type == REDIS_REPLY_STRING) && r->len && r->str) {
-                    tuple_dupe_binary(tuple, proc->label_outvalue, r->str, r->len);
-                    ws_set_outdata(tuple, proc->outtype_tuple, dout);
-               }
-          }
-     }
-     freeReplyObject(reply);
-     return 1;
-}
-
-//select first element in search
-static int nest_search_callback_one(void * vproc, void * vkey,
-                                    wsdata_t * tdata, wsdata_t * member) {
-     wsdata_t ** pkey = (wsdata_t**)vkey; 
-     if (*pkey != NULL) {
-          return 0;
-     }
-     *pkey = member;
-     return 1;
-}
-
-static int proc_set(void * vinstance, wsdata_t * tuple,
-                      ws_doutput_t * dout, int type_index) {
-
-     proc_instance_t * proc = (proc_instance_t*)vinstance;
-     proc->meta_process_cnt++;
-
-     wsdata_t * key = NULL;
-     wsdata_t * value = NULL;
-
-     tuple_nested_search(tuple, &proc->nest_keys,
-                         nest_search_callback_one,
-                         proc, &key);
-     tuple_nested_search(tuple, &proc->nest_values,
-                         nest_search_callback_one,
-                         proc, &value);
-
-     if (key && value) {
-          dprint("found key and value");
-          char * keybuf = NULL;
-          int keylen = 0;
-          char * valbuf = NULL;
-          int vallen = 0;
-          
-          if (dtype_string_buffer(key, &keybuf, &keylen) && 
-              dtype_string_buffer(value, &valbuf, &vallen)) {
-               dprint("found key and value strings");
-
-               redisReply *reply;
-
-               if (proc->expire_sec) {
-                    reply = redisCommand(proc->rc, "SET %b %b EX %d",
-                                         keybuf, keylen, valbuf, vallen,
-                                         (int)proc->expire_sec);
-               }
-               else {
-                    dprint("setting %.*s %.*s", keylen, keybuf, vallen, valbuf);
-                    reply = redisCommand(proc->rc, "SET %b %b",
-                                         keybuf, keylen, valbuf, vallen);
-               }
-               if (reply) {
-                    freeReplyObject(reply);
-               }
-          }
-     }
-
-     //always return 1 since we don't know if table will flush old data
-     return 1;
-}
-
-static int nest_search_callback_incr(void * vproc, void * vevent,
-                                    wsdata_t * tdata, wsdata_t * member) {
-     proc_instance_t * proc = (proc_instance_t*)vproc;
-     //search for member key
-     char * buf = NULL;
-     int len = 0;
-
-     if (!dtype_string_buffer(member, &buf, &len)) {
-          return 0;
-     }
-     redisReply *reply;
-
-     reply = redisCommand(proc->rc, "INCR %b", buf, len);
-     if (reply) {
-          if (reply->type == REDIS_REPLY_INTEGER) {
-               tuple_member_create_int(tdata, reply->integer, proc->label_outvalue);
-          }
-          freeReplyObject(reply);
-     }
-     return 1;
-}
-
-static int proc_incr(void * vinstance, wsdata_t * tuple,
-                      ws_doutput_t * dout, int type_index) {
-
-     proc_instance_t * proc = (proc_instance_t*)vinstance;
-     proc->meta_process_cnt++;
-
-     tuple_nested_search(tuple, &proc->nest_keys,
-                         nest_search_callback_incr,
-                         proc, NULL);
-     
-     ws_set_outdata(tuple, proc->outtype_tuple, dout);
-
-     //always return 1 since we don't know if table will flush old data
-     return 1;
-}
-
-static int nest_search_callback_decr(void * vproc, void * vevent,
-                                    wsdata_t * tdata, wsdata_t * member) {
-     proc_instance_t * proc = (proc_instance_t*)vproc;
-     //search for member key
-     char * buf = NULL;
-     int len = 0;
-
-     if (!dtype_string_buffer(member, &buf, &len)) {
-          return 0;
-     }
-     redisReply *reply;
-
-     reply = redisCommand(proc->rc, "DECR %b", buf, len);
-     if (reply) {
-          if (reply->type == REDIS_REPLY_INTEGER) {
-               tuple_member_create_int(tdata, reply->integer, proc->label_outvalue);
-          }
-          freeReplyObject(reply);
-     }
-     return 1;
-}
-
-static int proc_decr(void * vinstance, wsdata_t * tuple,
-                      ws_doutput_t * dout, int type_index) {
-
-     proc_instance_t * proc = (proc_instance_t*)vinstance;
-     proc->meta_process_cnt++;
-
-     tuple_nested_search(tuple, &proc->nest_keys,
-                         nest_search_callback_decr,
-                         proc, NULL);
-     
-     ws_set_outdata(tuple, proc->outtype_tuple, dout);
-     //always return 1 since we don't know if table will flush old data
-     return 1;
-}
-
-static int nest_search_callback_publish(void * vproc, void * vevent,
-                                    wsdata_t * tdata, wsdata_t * member) {
-     dprint("got publish value");
-     proc_instance_t * proc = (proc_instance_t*)vproc;
-     //search for member key
-     char * buf = NULL;
-     int len = 0;
-
-     if (!dtype_string_buffer(member, &buf, &len)) {
-          return 0;
-     }
-     redisReply *reply;
-
-     dprint("attempting to publish value");
-     reply = redisCommand(proc->rc, "PUBLISH %s %b", proc->publish_channel, buf, len);
-     if (reply) {
-          dprint("success in publishing");
-          freeReplyObject(reply);
-     }
-     return 1;
-}
-
-
-static int proc_publish(void * vinstance, wsdata_t * tuple,
-                      ws_doutput_t * dout, int type_index) {
-
-     proc_instance_t * proc = (proc_instance_t*)vinstance;
-     proc->meta_process_cnt++;
-
-     tuple_nested_search(tuple, &proc->nest_keys,
-                         nest_search_callback_publish,
-                         proc, NULL);
-     tuple_nested_search(tuple, &proc->nest_values,
-                         nest_search_callback_publish,
-                         proc, NULL);
-     
-     ws_set_outdata(tuple, proc->outtype_tuple, dout);
-
-     //always return 1 since we don't know if table will flush old data
-     return 1;
-}*/
-
-//return 1 if successful
-//return 0 if no..
 int proc_destroy(void * vinstance) {
     delete static_cast<proc_redisstream*>(vinstance);
     return 1;
 }
-
-
