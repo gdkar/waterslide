@@ -119,6 +119,7 @@ struct proc_instance {
      uint64_t meta_process_cnt  {};
      uint64_t badfile_cnt       {};
      uint64_t outcnt            {};
+     uint64_t total_bytes       {};
 
      ws_outtype_t * outtype_tuple{};
      std::deque<std::string> devices{};
@@ -139,10 +140,12 @@ struct proc_instance {
      wslabel_t * label_tstamp   {};
      wslabel_t * label_caplen   {};
      wslabel_t * label_length   {};
-     bool stdin_data = false;
-     bool done = false;
-     bool pass_file_meta = false;
-     bool suppress_output = false;
+     bool stdin_data{};
+     bool done{};
+     bool pass_file_meta{};
+     bool suppress_output{};
+     bool repeat_forever{};
+     uint64_t repeat_until{};
 };
 
 static int read_names_glob(proc_instance *proc, const char *pattern);
@@ -154,7 +157,7 @@ static int proc_cmd_options(int argc, char ** argv,
                              proc_instance * proc, void * type_table)
 {
      auto op = 0;
-     while ((op = getopt(argc, argv, "d:N:PT:r:ismL:")) != EOF) {
+     while ((op = getopt(argc, argv, "d:N:PT:r:ismL:RU:")) != EOF) {
         switch (op) {
             case 'd':
                 proc->devices.emplace_back(optarg);
@@ -185,6 +188,15 @@ static int proc_cmd_options(int argc, char ** argv,
                 read_names_glob(proc, optarg);
                 proc->used_glob++;
                 break;
+            case 'R':
+                proc->repeat_forever = true;
+                break;
+            case 'U': {
+                auto _until = atol(optarg);
+                if(_until > 0) {
+                    proc->repeat_until = _until;
+                }
+            }
             default:
                 return 0;
         }
@@ -290,6 +302,8 @@ static int get_next_file(proc_instance * proc)
                if (!proc->suppress_output) {
                     tool_print("opened file %s", errbuf);
                }
+               if(proc->repeat_forever || (proc->total_bytes < proc->repeat_until))
+                    proc->filenames.push_back(filename);
                return 1;
           }
      }
@@ -408,6 +422,7 @@ static inline int read_next_record(proc_instance * proc, wsdata_t * tdata)
               , pcap_datalink(proc->pcap.get())
               , proc->label_linktype
                 );
+            proc->total_bytes += pkt_hdr.caplen;
             return 1;
         }
     }
@@ -487,6 +502,7 @@ int proc_destroy(void * vinstance)
      auto proc = (proc_instance*)vinstance;
      tool_print("meta_proc cnt %" PRIu64, proc->meta_process_cnt);
      tool_print("output cnt %" PRIu64, proc->outcnt);
+     tool_print("total bytes %" PRIu64, proc->total_bytes);
      if (proc->badfile_cnt) {
           tool_print("badfile cnt %" PRIu64, proc->badfile_cnt);
      }

@@ -2,13 +2,14 @@
 from __future__ import print_function
 
 import struct, pathlib,random,argparse,sys,re, shlex
-
+import subprocess
 def check_size(pth):
     pth = pathlib.Path(pth).resolve()
-    with pth.open('rb') as _file:
-        bin_magic,bin_size = struct.unpack('ii',_file.read(8))
-    if bin_magic != 0x339CC0DA:
-        raise ValueError("invalid magic {}".format(hex(bin_magic)))
+    bin_size = int(subprocess.check_output(['binsize-shared',pth.as_posix()]))
+#    with pth.open('rb') as _file:
+#        bin_magic,bin_size = struct.unpack('ii',_file.read(8))
+#    if bin_magic != 0x339CC0DA:
+#        raise ValueError("invalid magic {}".format(hex(bin_magic)))
     return bin_size
 
 def _check_size(pth):
