@@ -1135,6 +1135,8 @@ int vectormatch_proc::process_monitor(wsdata_t *input_data, ws_doutput_t* dout, 
 
 int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
+
+    process_common(input_data,dout,type_index);
     auto tmp = status_incremental;
     status_total += status_incremental;
     status_incremental = status_info::make_info();
@@ -1218,7 +1220,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
     }
     return process_common(input_data,dout,type_index);
 }
-int vectormatch_proc::process_common(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
+int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* dout, int /*type_index*/)
 {
     auto found = false;
     while(!cb_queue.empty()) {
