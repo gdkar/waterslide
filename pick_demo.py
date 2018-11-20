@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-from __future__ import print_function
+from __future__ import print_function, division
 
 import struct, pathlib,random,argparse,sys,re, shlex
 import subprocess
@@ -43,7 +43,7 @@ def pick(root, limit = 4255):
             expr       = parts[0]
             binfile    = pathlib.Path(parts[2]).resolve().absolute()
             label      = parts[1]#gd['label']
-            binsize    = check_size(binfile)
+            binsize    = ((check_size(binfile) + 5)//6) * 6
             if binsize + total <= limit:
                 print(line,file=sys.stdout)
                 total += binsize
