@@ -216,7 +216,7 @@ int proc_flush(wsdata_t * tuple,ws_doutput_t * dout, int type_index);
 
 int proc_redisstream::cmd_options(int argc, char ** argv, void * type_table) {
      int op;
-     while ((op = getopt(argc, argv, "P:S:E:H:M:B:h:p:L:R:I:")) != EOF) {
+     while ((op = getopt(argc, argv, "P:S:E:H:M:B:h:p:L:RI:")) != EOF) {
           switch (op) {
           case 'P':
                stream_key = std::string{optarg};
@@ -398,6 +398,15 @@ struct str_builder {
             return { static_cast<const_pointer>(begin_), end_ - begin_};
         }
     }
+    std::pair<pointer, size_t> get()
+    {
+        if(begin_ == end_) {
+            return { nullptr, 0ul};
+        } else {
+            return { begin_, end_ - begin_};
+        }
+    }
+
     template<class It>
     bool append(It from_, It to_)
     {
@@ -436,7 +445,7 @@ struct str_builder {
         }
         return false;
     }
-    std::pair<const_pointer, size_t> finish()
+    std::pair<pointer, size_t> finish()
     {
         auto res = get();
         begin_ = end_;
@@ -571,20 +580,31 @@ int proc_redisstream::proc_xadd(wsdata_t *ituple,ws_doutput_t *dout, int type_id
     if(!connect())
         return 0;
 
+    auto sbuf = str_builder<8192>{};
     auto stream_ = std::make_pair<char*,int>(&stream_key[0],int(stream_key.size()));
     if(stream_label) {
         if(auto skey = tuple_find_single_label(ituple, stream_label)) {
             if(skey->dtype == dtype_binary){
                 auto bdata_ = (wsdt_binary_t*)skey->data;
-                stream_ = std::make_pair(bdata_->buf,bdata_->len);
+                stream_= std::make_pair(bdata_->buf,bdata_->len);
             } else {
                 dtype_string_buffer(skey, &stream_.first, &stream_.second);
             }
+            if(stream_key.size()) {
+                if(sbuf.append(stream_key.data(),stream_key.size())
+                || sbuf.append(stream_.first,stream_.second)) {
+                    stream_ = sbuf.finish();
+                } else {
+                    sbuf.discard();
+                }
+            }
         }
     }
+    if(!stream_.second)
+        return false;
+
     if(items.size()) {
         auto args = avec<128>{};
-        auto sbuf = str_builder<8192>{};
         args.push_back("XADD");
         args.push_back(stream_);
         if(maxlen) {
