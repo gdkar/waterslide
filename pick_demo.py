@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#! /usr/bin/env python3
 from __future__ import print_function, division
 
 import struct, pathlib,random,argparse,sys,re, shlex
@@ -6,10 +6,6 @@ import subprocess
 def check_size(pth):
     pth = pathlib.Path(pth).resolve()
     bin_size = int(subprocess.check_output(['binsize-shared',pth.as_posix()]))
-#    with pth.open('rb') as _file:
-#        bin_magic,bin_size = struct.unpack('ii',_file.read(8))
-#    if bin_magic != 0x339CC0DA:
-#        raise ValueError("invalid magic {}".format(hex(bin_magic)))
     return bin_size
 
 def _check_size(pth):
@@ -32,7 +28,7 @@ def pick(root, limit = 4255):
     count = 0
     total = 0
     expr = re.compile('(?P<first>["\'])(?P<expr>.*)(?P=first)\\s*(?P<label>\\(.*?\\))\\s*(?P<sec>[\'\"])(?P<path>.*)(?P=sec)')
-    with root.open('rb') as _ifile:
+    with root.open('r') as _ifile:
         lines = [_.strip() for _ in _ifile.readlines()]
 #   reordering goes here.
 #   lines = sorted(lines,key=lambda x:len(shlex.split(x)[0]))
@@ -42,7 +38,7 @@ def pick(root, limit = 4255):
             parts = shlex.split(line)
             expr       = parts[0]
             binfile    = pathlib.Path(parts[2]).resolve().absolute()
-            label      = parts[1]#gd['label']
+            label      = parts[1]
             binsize    = ((check_size(binfile) + 5)//6) * 6
             if binsize + total <= limit:
                 print(line,file=sys.stdout)
