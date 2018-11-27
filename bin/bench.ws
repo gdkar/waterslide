@@ -1,5 +1,5 @@
 %thread(1) {
-    wsproto_in  -r /var/packets.mpproto -N "${TOTAL_MLEN}" -> $data_orig
+    wsproto_in  -r "${PACKETS}" -N "${TOTAL_MLEN}" -> $data_orig
 
     $data_orig | addlabelmember ITEM_NUMBER -c 0 | strlen CONTENT | calc '#TOTAL_LENGTH+=STRLEN;CONTENT_POSITION=#TOTAL_LENGTH;' -> $data_tagged
     $data_tagged| bundle -N 256 | workbalance -N 2 -J WCARDS -L CARD_ -> $data_in
