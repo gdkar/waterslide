@@ -106,7 +106,7 @@ extern "C" int proc_destroy(
     );
  
 const char proc_name[] = PROC_NAME;
-const char proc_version[]    = "1.0.1-rc.1";
+const char proc_version[]    = "1.0.2-allpha.1";
 const char * const proc_alias[]     = { "vectorre2", NULL };
 const char *const proc_tags[]     = { "match", "vector", NULL };
 const char proc_purpose[]    = "matches a list of regular expressions and returns results";
@@ -200,6 +200,7 @@ struct vectormatch_proc {
         size_type hit_cnt{};
         size_type out_cnt{};
         size_type byte_cnt{};
+        int       max_matches{};
         int64_t   start_ts   {};
 
         static status_info make_info()
@@ -216,6 +217,7 @@ struct vectormatch_proc {
             hit_cnt          += o.hit_cnt;
             out_cnt          += o.out_cnt;
             byte_cnt         += o.byte_cnt;
+            max_matches       = std::max(max_matches,o.max_matches);
             return *this;
         }
     };
@@ -313,8 +315,22 @@ int vectormatch_proc::cmd_options(int argc, char ** argv, void * type_table)
    int F_opt = 0;
    auto cfg_list = std::vector<std::string>{};
    auto opt_list = std::string{};
-   while ((op = getopt(argc, argv, "PR:r:s:O:F:L:M")) != EOF)  {
+    RE2::Options opts{};
+    opts.set_dot_nl(true);
+    opts.set_one_line(false);
+    opts.set_perl_classes(true);
+    opts.set_word_boundary(true);
+    opts.set_case_sensitive(true);
+    opts.set_posix_syntax(false);
+    opts.set_never_capture(true);
+    opts.set_encoding(RE2::Options::EncodingLatin1);
+
+   while ((op = getopt(argc, argv, "PR:r:s:O:F:L:Mb:")) != EOF)  {
       switch (op)  {
+         case 'b':{
+            opts.set_max_mem(atoi(optarg));
+            break;
+         }
          case 'P':{
             pass_all = true;
             break;
@@ -366,16 +382,9 @@ int vectormatch_proc::cmd_options(int argc, char ** argv, void * type_table)
       , wsregister_label(type_table, "INTERVAL")
       , wsregister_label(type_table, "EVENT_RATE")
       , wsregister_label(type_table, "BANDWIDTH")
+      , wsregister_label(type_table, "MAX_MATCHES")
     };
     status_total = status_incremental = status_info::make_info();
-    RE2::Options opts{};
-    opts.set_dot_nl(true);
-    opts.set_one_line(false);
-    opts.set_perl_classes(true);
-    opts.set_word_boundary(true);
-    opts.set_case_sensitive(true);
-    opts.set_posix_syntax(false);
-    opts.set_encoding(RE2::Options::EncodingLatin1);
     if(!opt_list.empty()) {
         auto negate = false;
         opts.set_never_nl(false);
@@ -418,6 +427,7 @@ vectormatch_proc::~vectormatch_proc()
     tool_print("meta_proc cnt %" PRIu64, status_total.meta_process_cnt);
     tool_print("matched tuples cnt %" PRIu64, status_total.hit_cnt);
     tool_print("output cnt %" PRIu64, status_total.out_cnt);
+    tool_print("max status cnt %d" , status_total.max_matches);
     tool_print("bytes processed %" PRIu64, status_total.byte_cnt);
 }
 /*-----------------------------------------------------------------------------
@@ -565,6 +575,7 @@ int vectormatch_proc::find_match(wsdata_t * wsd,           /* the tuple member *
          matches++;
       }   
    }
+   status_incremental.max_matches = std::max(matches,status_incremental.max_matches);
    return matches ? 1 : 0;
 }
 
@@ -589,9 +600,14 @@ int vectormatch_proc::member_match(
       status_incremental.byte_cnt+=  len;
       found = find_match(mpd_label, buf, len, tdata);
    }
-   if (found)
+   if (found) {
       status_incremental.hit_cnt++;
-
+      if(matched_label && !wsdata_check_label(mpd_label,matched_label))
+            tuple_add_member_label(
+                tdata, /* the tuple itself */
+                mpd_label,    /* the tuple member to be added to */
+                matched_label/* the label to be added */);
+    }
    return found;
 }
 int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
@@ -627,6 +643,7 @@ int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, i
             tuple_member_create_double(dst, 0., stats_labels.event_rate);
             tuple_member_create_double(dst, 0., stats_labels.bandwidth);
         }
+        tuple_member_create_int   (dst, data.max_matches,                stats_labels.max_matches);
     };
     if(!status_label) {
         if(status_incr_label && !status_total_label) {
@@ -692,6 +709,7 @@ int vectormatch_proc::process_monitor(wsdata_t *input_data, ws_doutput_t* dout, 
                 tuple_member_create_double(dst, 0., stats_labels.event_rate);
                 tuple_member_create_double(dst, 0., stats_labels.bandwidth);
             }
+            tuple_member_create_int   (dst, data.max_matches,                stats_labels.max_matches);
         };
         if(!status_label) {
             if(status_incr_label && !status_total_label) {
