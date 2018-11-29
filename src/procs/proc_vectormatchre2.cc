@@ -607,6 +607,9 @@ int vectormatch_proc::member_match(
                 tdata, /* the tuple itself */
                 mpd_label,    /* the tuple member to be added to */
                 matched_label/* the label to be added */);
+      if (found && matched_label && !wsdata_check_label(tdata, matched_label))
+        wsdata_add_label(tdata, matched_label);
+
     }
    return found;
 }
