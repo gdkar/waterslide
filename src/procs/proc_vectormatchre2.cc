@@ -329,7 +329,8 @@ int vectormatch_proc::cmd_options(int argc, char ** argv, void * type_table)
    while ((op = getopt(argc, argv, "PR:r:s:O:F:L:Mb:")) != EOF)  {
       switch (op)  {
          case 'b':{
-            opts.set_max_mem(atoi(optarg));
+            opts.set_max_mem(atoll(optarg));
+            tool_print("setting max memory to %ld \n",opts.max_mem());
             break;
          }
          case 'P':{
