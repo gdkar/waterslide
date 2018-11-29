@@ -11,7 +11,7 @@
     $inb_0 | flush -N -C 4 -> $status_var_0
     $inb_0 | unbundle -> $unb_0
     $flush_var, $unb_0 | timestamp -L TS_PRE -N -I -> $stamp_0
-    $status_var_0:STATUS, $stamp_0| vectormatchre2 CONTENT -s RE2_0 -R TOTAL_STATS -r INCR_STATS -L RE2_0_MATCH -F ../exprs.cut -M -b "${MAX_MEM}" | timestamp -L TS_POST -N -I -> $data_mid_0;
+    $status_var_0:STATUS, $stamp_0| vectormatchre2 CONTENT -s RE2_0 -R TOTAL_STATS -r INCR_STATS -L RE2_0_MATCH -F ../exprs.cut -M  "${MAX_MEM}" | timestamp -L TS_POST -N -I -> $data_mid_0;
     $data_mid_0.RE2_0 | addlabelmember RE2 -V RE2_0 | bundle -N 1 -> $status_out;
     $data_mid_0.RE2_0_MATCH | bundle -N 128 -> $data_out;
 
@@ -22,7 +22,7 @@
     $inb_1 | unbundle -> $unb_1
 
     $flush_var, $unb_1 | timestamp -L TS_PRE -N -I -> $stamp_1
-    $status_var_1:STATUS, $stamp_1| vectormatchre2 CONTENT -s RE2_1 -R TOTAL_STATS -r INCR_STATS -L RE2_1_MATCH  -F ../exprs.cut -M -b "${MAX_MEM}" | timestamp -L TS_POST -N -I -> $data_mid_1;
+    $status_var_1:STATUS, $stamp_1| vectormatchre2 CONTENT -s RE2_1 -R TOTAL_STATS -r INCR_STATS -L RE2_1_MATCH  -F ../exprs.cut -M "${MAX_MEM}" | timestamp -L TS_POST -N -I -> $data_mid_1;
     $data_mid_1.RE2_1 | addlabelmember RE2 -V RE2_1 | bundle -N 1 -> $status_out;
     $data_mid_1.RE2_1_MATCH | bundle -N 128 -> $data_out;
 
