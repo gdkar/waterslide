@@ -323,12 +323,14 @@ int vectormatch_proc::cmd_options(int argc, char ** argv, void * type_table)
     opts.set_case_sensitive(true);
     opts.set_posix_syntax(false);
     opts.set_never_capture(true);
+    opts.set_longest_match(false);
     opts.set_encoding(RE2::Options::EncodingLatin1);
 
    while ((op = getopt(argc, argv, "PR:r:s:O:F:L:Mb:")) != EOF)  {
       switch (op)  {
          case 'b':{
-            opts.set_max_mem(atoi(optarg));
+            opts.set_max_mem(atoll(optarg));
+            tool_print("setting max memory to %ld \n",opts.max_mem());
             break;
          }
          case 'P':{
@@ -607,7 +609,7 @@ int vectormatch_proc::member_match(
                 tdata, /* the tuple itself */
                 mpd_label,    /* the tuple member to be added to */
                 matched_label/* the label to be added */);
-      if (found && matched_label && !wsdata_check_label(tdata, matched_label))
+      if (matched_label && !wsdata_check_label(tdata, matched_label))
         wsdata_add_label(tdata, matched_label);
 
     }

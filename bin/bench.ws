@@ -33,6 +33,6 @@
     $unbundled_out | labelstat| print -VVT
     $unbundled_out | label MATCH | mklabelset CONTENT -S -L TAGS | removefromtuple CONTENT -> $exit
 
-    $flush_var, $exit | redisstream -M 1048576 -B 256 -P "${PREFIX}:alerts"
-	$flush_var, $unpacked_stat | redisstream -M 65536 -B 16  -E CHAIN -H INCR_STATS -L INCREMENTAL -I MAX_MATCHES -I DEVICE_TEMP -I BANDWIDTH -I EVENT_CNT -I EVENT_RATE -I HIT_CNT -I INTERVAL -H TOTAL_STATS -L TOTAL -I EVENT_CNT -I HIT_CNT -I BANDWIDTH -I INTERVAL -I BYTE_CNT -I END_TS -P "${PREFIX}:status"
+    $flush_var, $exit | redisstream -M 1048576 ${ALERTS_LIMIT}  -B 256 -P "${PREFIX}:alerts"
+	$flush_var, $unpacked_stat | redisstream -M 65536 ${STATUS_LIMIT} -B 16  -E CHAIN -H INCR_STATS -L INCREMENTAL -I MAX_MATCHES -I DEVICE_TEMP -I BANDWIDTH -I EVENT_CNT -I EVENT_RATE -I HIT_CNT -I INTERVAL -H TOTAL_STATS -L TOTAL -I EVENT_CNT -I HIT_CNT -I BANDWIDTH -I INTERVAL -I BYTE_CNT -I END_TS -P "${PREFIX}:status"
 }
