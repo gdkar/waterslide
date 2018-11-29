@@ -1,5 +1,5 @@
 %thread(1) {
-    wsproto_in  -r /var/packets.mpproto -N "${TOTAL_MLEN}" -> $data_orig
+    wsproto_in  -r "${PACKETS}" -N "${TOTAL_MLEN}" -> $data_orig
 
     $data_orig | addlabelmember ITEM_NUMBER -c 0 | strlen CONTENT | calc '#TOTAL_LENGTH+=STRLEN;CONTENT_POSITION=#TOTAL_LENGTH;' -> $data_tagged
     $data_tagged| bundle -N 256 | workbalance -N 1 -J WCARDS -L CARD_ -> $data_in
@@ -11,13 +11,13 @@
     $inb_0 | flush -N -C 16 -> $status_var_0
     $inb_0 | unbundle -> $unb_0
     $flush_var, $unb_0 | timestamp -L TS_PRE -N -I -> $stamp_0
-    $status_var_0:STATUS, $stamp_0:TAG | vectormatchnpu CONTENT -s CHAIN_0 -R TOTAL_STATS -r INCR_STATS -L CHAIN_0_MATCH -D "${CARD}" -C0 -F ../exprs.cut -M -m "${NMATCHES}" -v6 | timestamp -L TS_MID -N -I -> $data_mid_0;
+    $status_var_0:STATUS, $stamp_0:TAG | vectormatchnpu CONTENT -s CHAIN_0 -R TOTAL_STATS -r INCR_STATS -L CHAIN_0_MATCH -D "${CARD}" -C0 -F ../exprs.0.cut -M -m "${NMATCHES}" -v6 | timestamp -L TS_MID -N -I -> $data_mid_0;
 
-    $status_var_0:STATUS, $data_mid_0:TAG | vectormatchnpu CONTENT -s CHAIN_1 -R TOTAL_STATS -r INCR_STATS -L CHAIN_1_MATCH -D "${CARD}" -C1 -F ../exprs.cut -M -m "${NMATCHES}" -v6 | timestamp -L TS_POST -N -I -> $data_mid_1;
+    $status_var_0:STATUS, $data_mid_0 | vectormatchnpu CONTENT -s CHAIN_1 -R TOTAL_STATS -r INCR_STATS -L CHAIN_1_MATCH -D "${CARD}" -C1 -F ../exprs.1.cut -M -m "${NMATCHES}" -v6 | timestamp -L TS_POST -N -I -> $data_mid_1;
     $data_mid_1.CHAIN_0 | addlabelm CHAIN -V CHAIN_0 -> $chain_tagged
     $data_mid_1.CHAIN_1 | addlabelm CHAIN -V CHAIN_1 -> $chain_tagged
     $chain_tagged | bundle -N 16 -> $status_out;
-    $data_mid_1.CHAIN_0_MATCH, $data_mid_1.CHAIN_1_MATCH | bundle -N 128 -> $data_out;
+    $data_mid_1 | haslabel CHAIN_0_MATCH CHAIN_1_MATCH | bundle -N 128 -> $data_out;
 
 }
 %thread(4){
