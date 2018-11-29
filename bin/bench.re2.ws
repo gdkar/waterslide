@@ -8,7 +8,7 @@
 
 %thread(2){
     $data_in.CARD_0 | workreceive -J WCARDS -> $inb_0
-    $inb_0 | flush -N -C 4 -> $status_var_0
+    $inb_0 | flush -N -C 16 -> $status_var_0
     $inb_0 | unbundle -> $unb_0
     $flush_var, $unb_0 | timestamp -L TS_PRE -N -I -> $stamp_0
     $status_var_0:STATUS, $stamp_0| vectormatchre2 CONTENT -s RE2_0 -R TOTAL_STATS -r INCR_STATS -L RE2_0_MATCH -F ../exprs.cut -M  "${MAX_MEM}" | timestamp -L TS_POST -N -I -> $data_mid_0;
@@ -34,5 +34,5 @@
     $unbundled_out | label MATCH | mklabelset CONTENT -S -L TAGS | removefromtuple CONTENT -> $exit
 
     $flush_var, $exit | redisstream -M 1048576 -B 256 -P "${PREFIX}:alerts"
-	$flush_var, $unpacked_stat | redisstream -M 65536 -B 8 -E RE2 -H INCR_STATS -L INCREMENTAL -I BANDWIDTH -I EVENT_CNT -I EVENT_RATE -I HIT_CNT -I INTERVAL -I MAX_MATCHES -H TOTAL_STATS -L TOTAL -I EVENT_CNT -I HIT_CNT -I BANDWIDTH -I INTERVAL -I BYTE_CNT -I END_TS -I MAX_MATCHES -P "${PREFIX}:status"
+	$flush_var, $unpacked_stat | redisstream -M 65536 -B 16 -E RE2 -H INCR_STATS -L INCREMENTAL -I BANDWIDTH -I EVENT_CNT -I EVENT_RATE -I HIT_CNT -I INTERVAL -I MAX_MATCHES -H TOTAL_STATS -L TOTAL -I EVENT_CNT -I HIT_CNT -I BANDWIDTH -I INTERVAL -I BYTE_CNT -I END_TS -I MAX_MATCHES -P "${PREFIX}:status"
 }
