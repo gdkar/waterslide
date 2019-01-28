@@ -1001,8 +1001,6 @@ proc_process_t vectormatch_proc::input_set(
                 auto proc = (vectormatch_proc*)vinstance;
                 return proc->process_meta(input_data,dout,type_index);
             };
-//            return [](void *
-//            &vectormatch_proc::proc_process_meta; // look only in the labels.
         }
     }else if(wsdatatype_match(type_table,input_type, "FLUSH_TYPE")) {
         if(wslabel_match(type_table, port, "STATUS")) {
@@ -1052,7 +1050,6 @@ proc_process_t vectormatch_proc::input_set(
 namespace {
 void result_cb(void *opaque, const npu_result *res)
 {
-//    error_print("result up %p",opaque);
     if(res->nmatches) {
         auto priv = static_cast<callback_data*>(opaque);
         if(priv->nmatches + res->nmatches > priv->capacity) {
@@ -1070,7 +1067,6 @@ void result_cb(void *opaque, const npu_result *res)
 void cleanup_cb(void *opaque)
 {
     auto priv = static_cast<callback_data*>(opaque);
-//    error_print("cleaning up %p",opaque);
     priv->is_done.store(true);
 }
 }
@@ -1207,7 +1203,7 @@ int vectormatch_proc::process_status(wsdata_t *input_data, ws_doutput_t* dout, i
         }
     }
     ws_set_outdata(tdata, outtype_tuple, dout);
-    return 0;
+    return 1;
 }
 int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, int type_index)
 {
@@ -1232,8 +1228,7 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
         npu_client_free(&client);
         npu_thread_stop(driver.get());
     }
-//    return 
-    return process_common(input_data,dout,type_index);
+    return process_common(input_data,dout,type_index) || 1;
 }
 int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* dout, int /*type_index*/)
 {
@@ -1318,77 +1313,78 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
     /* lset - the list of labels we will be searching over.
     * Iterate over these labels and call match on each of them */
     auto bail = false;
-    for (auto i = 0; i < lset.len && !bail; i++) {
-        if (tuple_find_label(input_data, lset.labels[i], &members_len,&members)){
-            auto nbin = 0;
-            auto nsub = 0;
+    if(client) {
+        for (auto i = 0; i < lset.len && !bail; i++) {
+            if (tuple_find_label(input_data, lset.labels[i], &members_len,&members)){
+                auto nbin = 0;
+                auto nsub = 0;
 
-            for(auto j = 0; j < members_len; ++j) {
-                if(members[j]->dtype == dtype_binary
-                || members[j]->dtype == dtype_string)
-                    ++nbin;
-            }
-            if(nbin) {
-                wsdata_add_reference(input_data);
-                submitted = true;
+                for(auto j = 0; j < members_len; ++j) {
+                    if(members[j]->dtype == dtype_binary
+                    || members[j]->dtype == dtype_string)
+                        ++nbin;
+                }
+                if(nbin) {
+                    wsdata_add_reference(input_data);
+                    submitted = true;
 
-                for(auto j = 0; j < members_len && !bail; ++j) {
-                    if(!(members[j]->dtype == dtype_binary
-                    || members[j]->dtype == dtype_string))
-                        continue;
-                    auto member = members[j];
-                    if(cb_queue.empty() || cb_queue.back()->full()) {
-                        cb_queue.emplace_back(new callback_batch());
-                    }
-                    cb_queue.back()->emplace_back();
-                    auto &qd = cb_queue.back()->back();
-                    qd.input_data = input_data;
-                    qd.member_data= member;
-                    qd.type_index = type_index;
-                    qd.is_last     = (++nsub == nbin);
-                    auto err = npu_client_new_packet(client, {result_cb, cleanup_cb,&qd});
-                    if(err < 0) {
-                        qd.is_last = true;
-                        qd.is_done.store(true);
-                        break;
-                    }
-                    auto dbeg = (const char*)0;
-                    auto dend = (const char*)0;
-                    if(member->dtype == dtype_binary) {
-                        auto wsb = (wsdt_binary_t*)member->data;
-                        dbeg = wsb->buf;
-                        dend = dbeg + wsb->len;
-                    }else if(member->dtype == dtype_string) {
-                        auto wss = (wsdt_string_t*)member->data;
-                        dbeg = wss->buf;
-                        dend = dbeg + wss->len;
-                    }
-                    while(dbeg != dend) {
-                        auto dnxt = npu_client_write_packet(client,dbeg,dend);
-                        if(!dnxt) {
-                            auto err = errno;
-                            error_print("npu_client_write_packet failed, %d, %s", err,strerror(err));
+                    for(auto j = 0; j < members_len && !bail; ++j) {
+                        if(!(members[j]->dtype == dtype_binary
+                        || members[j]->dtype == dtype_string))
+                            continue;
+                        auto member = members[j];
+                        if(cb_queue.empty() || cb_queue.back()->full()) {
+                            cb_queue.emplace_back(new callback_batch());
+                        }
+                        cb_queue.back()->emplace_back();
+                        auto &qd = cb_queue.back()->back();
+                        qd.input_data = input_data;
+                        qd.member_data= member;
+                        qd.type_index = type_index;
+                        qd.is_last     = (++nsub == nbin);
+                        auto err = npu_client_new_packet(client, {result_cb, cleanup_cb,&qd});
+                        if(err < 0) {
                             qd.is_last = true;
                             qd.is_done.store(true);
-                            bail = true;
                             break;
                         }
-                        dbeg = dnxt;
+                        auto dbeg = (const char*)0;
+                        auto dend = (const char*)0;
+                        if(member->dtype == dtype_binary) {
+                            auto wsb = (wsdt_binary_t*)member->data;
+                            dbeg = wsb->buf;
+                            dend = dbeg + wsb->len;
+                        }else if(member->dtype == dtype_string) {
+                            auto wss = (wsdt_string_t*)member->data;
+                            dbeg = wss->buf;
+                            dend = dbeg + wss->len;
+                        }
+                        while(dbeg != dend) {
+                            auto dnxt = npu_client_write_packet(client,dbeg,dend);
+                            if(!dnxt) {
+                                auto err = errno;
+                                error_print("npu_client_write_packet failed, %d, %s", err,strerror(err));
+                                qd.is_last = true;
+                                qd.is_done.store(true);
+                                bail = true;
+                                break;
+                            }
+                            dbeg = dnxt;
+                        }
+                        if(single_stream)
+                            npu_client_pause_packet(client);
+                        else
+                            npu_client_end_packet(client);
                     }
-                    if(single_stream)
-                        npu_client_pause_packet(client);
-                    else
-                        npu_client_end_packet(client);
                 }
             }
         }
     }
-//    npu_client_flush(client);
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++status_incremental.out_cnt;
     }
-    return process_common(input_data,dout,type_index);
+    return process_common(input_data,dout,type_index) || 1;
 }
 
 /*-----------------------------------------------------------------------------
@@ -1420,69 +1416,69 @@ int vectormatch_proc::process_allstr(
 
     auto nbin = 0;
     auto nsub = 0;
-
-    for(auto j = 0; j < members_len; ++j) {
-        if(members[j]->dtype == dtype_binary
-        || members[j]->dtype == dtype_string)
-            ++nbin;
-    }
-    if(nbin) {
-        wsdata_add_reference(input_data);
-        for(auto j = 0; j < members_len && !bail; ++j) {
-            auto member = members[j];
-            if(member->dtype != dtype_binary && member->dtype != dtype_string)
-                continue;
-            if(cb_queue.empty() || cb_queue.back()->full()) {
-                cb_queue.emplace_back(new callback_batch());
-            }
-            cb_queue.back()->emplace_back();
-            auto &qd = cb_queue.back()->back();
-            qd.input_data = input_data;
-            qd.member_data= member;
-            qd.type_index = type_index;
-            qd.is_last     = (++nsub == nbin);
-            submitted = true;
-            auto err = npu_client_new_packet(client, {result_cb, cleanup_cb,&qd});
-            if(err < 0) {
-                qd.is_last = true;
-                qd.is_done.store(true);
-                break;
-            }
-            auto dbeg = (const char*)0;
-            auto dend = (const char*)0;
-            if(member->dtype == dtype_binary) {
-                auto wsb = (wsdt_binary_t*)member->data;
-                dbeg = wsb->buf;
-                dend = dbeg + wsb->len;
-            }else if(member->dtype == dtype_string) {
-                auto wss = (wsdt_string_t*)member->data;
-                dbeg = wss->buf;
-                dend = dbeg + wss->len;
-            }
-            while(dbeg != dend) {
-                auto dnxt = npu_client_write_packet(client,dbeg,dend);
-                if(!dnxt) {
-                    auto err = errno;
-                    error_print("npu_client_write_packet failed, %d, %s", err,strerror(err));
+    if(client) {
+        for(auto j = 0; j < members_len; ++j) {
+            if(members[j]->dtype == dtype_binary
+            || members[j]->dtype == dtype_string)
+                ++nbin;
+        }
+        if(nbin) {
+            wsdata_add_reference(input_data);
+            for(auto j = 0; j < members_len && !bail; ++j) {
+                auto member = members[j];
+                if(member->dtype != dtype_binary && member->dtype != dtype_string)
+                    continue;
+                if(cb_queue.empty() || cb_queue.back()->full()) {
+                    cb_queue.emplace_back(new callback_batch());
+                }
+                cb_queue.back()->emplace_back();
+                auto &qd = cb_queue.back()->back();
+                qd.input_data = input_data;
+                qd.member_data= member;
+                qd.type_index = type_index;
+                qd.is_last     = (++nsub == nbin);
+                submitted = true;
+                auto err = npu_client_new_packet(client, {result_cb, cleanup_cb,&qd});
+                if(err < 0) {
                     qd.is_last = true;
                     qd.is_done.store(true);
-                    bail = true;
                     break;
                 }
-                dbeg = dnxt;
-            }
-            if(single_stream)
-                npu_client_pause_packet(client);
-            else
-                npu_client_end_packet(client);
-            }
+                auto dbeg = (const char*)0;
+                auto dend = (const char*)0;
+                if(member->dtype == dtype_binary) {
+                    auto wsb = (wsdt_binary_t*)member->data;
+                    dbeg = wsb->buf;
+                    dend = dbeg + wsb->len;
+                }else if(member->dtype == dtype_string) {
+                    auto wss = (wsdt_string_t*)member->data;
+                    dbeg = wss->buf;
+                    dend = dbeg + wss->len;
+                }
+                while(dbeg != dend) {
+                    auto dnxt = npu_client_write_packet(client,dbeg,dend);
+                    if(!dnxt) {
+                        auto err = errno;
+                        error_print("npu_client_write_packet failed, %d, %s", err,strerror(err));
+                        qd.is_last = true;
+                        qd.is_done.store(true);
+                        bail = true;
+                        break;
+                    }
+                    dbeg = dnxt;
+                }
+                if(single_stream)
+                    npu_client_pause_packet(client);
+                else
+                    npu_client_end_packet(client);
+                }
+        }
     }
-//    npu_client_flush(client);
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++status_incremental.out_cnt;
     }
-    return process_common(input_data,dout,type_index);
+    return process_common(input_data,dout,type_index) || 1;
 }
 
 /*-----------------------------------------------------------------------------
