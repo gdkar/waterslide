@@ -257,6 +257,8 @@ extern "C" const proc_option_t proc_opts[] = {
     "affix keyword label to matching tuple member",0,0},
     {'L',"","",
     "common label to affix to matched tuple member",0,0},
+    {'O',"","",
+    "common label to affix to overflowed tuple member",0,0},
     {'D',"","device",
     "device file to use.",0,0},
     {'E',"","expression",
@@ -464,6 +466,7 @@ struct vectormatch_proc {
     ws_outtype_t *  outtype_tuple{};
 //    wslabel_t * pattern_id_label{};   /* label affixed to the buffer that matches*/
     wslabel_t * matched_label{};   /* label affixed to the buffer that matches*/
+    wslabel_t * overflow_label{};
     wslabel_set_t    lset{};        /* set of labels to search over */
 
     std::bitset<LOCAL_MAX_TYPES> do_tag{};
@@ -477,6 +480,7 @@ struct vectormatch_proc {
             >
         > cb_queue;
     bool                              got_match{false};
+    bool                              got_overflow{false};
     std::shared_ptr<npu_driver>       driver{};
     npu_client                       *client{};
     int  verbosity{};
@@ -534,11 +538,14 @@ vectormatch_proc::~vectormatch_proc()
                 status_incremental.hit_cnt++;
                 got_match = true;
             }
-            if(qd.hw_overflow)
+            if(qd.hw_overflow) {
+                got_overflow = true;
                 status_incremental.hw_overflow++;
-            if(qd.qd_overflow)
+            }
+            if(qd.qd_overflow) {
+                got_overflow = true;
                 status_incremental.qd_overflow++;
-
+            }
             status_incremental.max_matches = std::max<int>(status_incremental.max_matches,qd.nmatches);
             for(auto i = 0; i < qd.nmatches; ++i) {
                 auto mval = qd.matches[i];
@@ -560,6 +567,14 @@ vectormatch_proc::~vectormatch_proc()
                 }
             }
             if(qd.is_last) {
+                if (got_overflow && overflow_label && !wsdata_check_label(qd.input_data,overflow_label)) { /* this is the -L option label */
+                    wsdata_add_label(
+                        qd.input_data,
+                        overflow_label);
+                    tuple_add_member_label(qd.input_data, /* the tuple itself */
+                            qd.input_data,    /* the tuple member to be added to */
+                            overflow_label/* the label to be added */);
+                }
                 if (got_match && matched_label && !wsdata_check_label(qd.input_data,matched_label)) { /* this is the -L option label */
                     wsdata_add_label(
                         qd.input_data,
@@ -570,7 +585,7 @@ vectormatch_proc::~vectormatch_proc()
                 }
                 wsdata_delete(qd.input_data);
                 got_match = false;
-
+                got_overflow = false;
             }
             cb_queue.front()->pop_front();
         }
@@ -606,7 +621,7 @@ int vectormatch_proc::cmd_options(
     int F_opt = 0;
 //    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 
-    while ((op = getopt(argc, argv, "SPm:B:s:r:R:E:D:C:q:v::F:L:M")) != EOF) {
+    while ((op = getopt(argc, argv, "SPm:B:s:r:R:E:D:C:q:v::F:L:O:M")) != EOF) {
         switch (op) {
           case 'S':{
                 single_stream = true;
@@ -691,6 +706,11 @@ int vectormatch_proc::cmd_options(
             case 'L':{  /* labels an entire tuple and  matching members. */
                 tool_print("Registering label '%s' for matching buffers.", optarg);
                 matched_label = wsregister_label(type_table, optarg);
+                break;
+            }
+            case 'O':{  /* labels an entire tuple and  matching members. */
+                tool_print("Registering label '%s' for overflowing buffers.", optarg);
+                overflow_label = wsregister_label(type_table, optarg);
                 break;
             }
             case 'R':{  /* labels an entire tuple and  matching members. */
@@ -1246,10 +1266,14 @@ int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* do
                 got_match = true;
             }
             status_incremental.max_matches = std::max<int>(status_incremental.max_matches,qd.nmatches);
-            if(qd.hw_overflow)
+            if(qd.hw_overflow) {
+                got_overflow = true;
                 status_incremental.hw_overflow++;
-            if(qd.qd_overflow)
+            }
+            if(qd.qd_overflow) {
+                got_overflow = true;
                 status_incremental.qd_overflow++;
+            }
             {
                 auto member = qd.member_data;
                 auto len    = size_t{};
@@ -1287,6 +1311,9 @@ int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* do
             }
             if(qd.is_last ){
                 if(qd.input_data) {
+                    if (got_overflow && overflow_label && !wsdata_check_label(qd.input_data,overflow_label)) { /* this is the -L option label */
+                        wsdata_add_label(qd.input_data,overflow_label);
+                    }
                     if (got_match && matched_label && !wsdata_check_label(qd.input_data,matched_label)) { /* this is the -L option label */
                         wsdata_add_label(qd.input_data,matched_label);
                     }
@@ -1297,6 +1324,7 @@ int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* do
                     wsdata_delete(qd.input_data);
                 }
                 got_match = false;
+                got_overflow = false;
             }
             cb_queue.front()->pop_front();
         }
