@@ -25,8 +25,7 @@ ifndef NOPB
   PBDIR = $(WS_LIB_DIR)/protobuflib
   PBBUILD = $(WS_BUILDROOT)/pkg/pbtemp
   PBPKG = protobuf-2.5.0*
-  PBEXE = protoc
-#$(QUIET)$(PBDIR)/bin/protoc
+  PBEXE = $(QUIET)$(PBDIR)/bin/protoc
 endif
 
 ifndef NORE2
