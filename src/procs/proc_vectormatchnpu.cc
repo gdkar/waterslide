@@ -194,7 +194,7 @@ static npu_registry npu_reg{};
  *---------------------------------------------------------------------------*/
 
 extern "C" const char proc_name[]        = PROC_NAME;
-extern "C" const char proc_version[]     = "0.1.7";
+extern "C" const char proc_version[]     = "0.1.8";
 extern "C" const char *const proc_alias[]  = { "vectornpu", "vnpu", "npu2", NULL };
 
 #if defined (MP_DOCS) || true
@@ -302,7 +302,7 @@ extern "C" const proc_port_t proc_input_ports[] = {
  *---------------------------------------------------------------------------*/
 
 struct callback_data {
-    static constexpr const int capacity = 16ul;
+    static constexpr const int capacity = 64ul;
     wsdata_t         *input_data{nullptr};
     wsdata_t         *member_data{nullptr};
     int               type_index{0};
