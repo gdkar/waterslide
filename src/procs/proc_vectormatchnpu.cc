@@ -348,6 +348,7 @@ struct pattern_group {
     int                      threshold{0};
     int                      divisor  {0};
     int                      pid{-1};
+    int                      pid_div{-1};
     pattern_group() = default;
     pattern_group(const pattern_group & ) = default;
     pattern_group(pattern_group && ) = default;
@@ -830,6 +831,7 @@ int vectormatch_proc::cmd_options(
                     continue;
                 }
                 grp.pid = pattern_id;
+                grp.pid_div = pattern_id + 1;
                 term_map.emplace(pattern_id, std::ref(grp));
                 term_map.emplace(pattern_id + 1, std::ref(grp));
                 tool_print("Loaded group '%s', div name '%s'  threshold %d, divisor %d, containing:",gpair.first->name,grp.label_div->name,grp.threshold, grp.divisor);
@@ -1291,10 +1293,11 @@ int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* do
                 auto eq_range = make_iter_range(term_map.equal_range(mval));
                 if (qd.member_data && label_members) {
                     for(auto & term : eq_range) {
+                        auto &sec = term.second;
                 //i.e., is there a tuple member we are going to add to?
                         /*get the label associated with the number returned by Aho-Corasick;
                         * default to label_match if one is not found. */
-                        auto mlabel = (mval == term.second.pid) ? term.second.label : term.second.label_div;
+                        auto mlabel = (sec.label_div && mval == sec.pid_div) ? sec.label_div : sec.label;
                         if (mlabel && !wsdata_check_label(qd.member_data, mlabel)) {
                             /* this allows labels to be indexed */
                             tuple_add_member_label(qd.input_data, /* the tuple itself */
