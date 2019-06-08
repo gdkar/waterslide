@@ -145,6 +145,7 @@ struct proc_instance {
      bool pass_file_meta{};
      bool suppress_output{};
      bool repeat_forever{};
+     bool is_device{};
      uint64_t repeat_until{};
 };
 
@@ -264,7 +265,12 @@ static int get_next_device(proc_instance *proc)
         char errbuf[PCAP_ERRBUF_SIZE] = {0,};
         proc->pcap.reset(pcap_open_live(_device.c_str(),proc->snaplen, proc->promisc, proc->to_ms, errbuf));
         if(proc->pcap) {
-            tool_print("opened device%s", errbuf);
+            if (!proc->suppress_output) {
+                tool_print("opened device%s", errbuf);
+            }
+            proc->is_device=true;
+            if(proc->repeat_forever || (proc->total_bytes < proc->repeat_until))
+                proc->devices.push_back(_device);
             return 1;
         } else {
             tool_print("failed to open device %s, %s", _device.c_str(),errbuf);
@@ -304,6 +310,7 @@ static int get_next_file(proc_instance * proc)
                }
                if(proc->repeat_forever || (proc->total_bytes < proc->repeat_until))
                     proc->filenames.push_back(filename);
+                proc->is_device=false;
                return 1;
           }
      }
@@ -390,7 +397,9 @@ static inline int read_next_record(proc_instance * proc, wsdata_t * tdata)
           , &pkt_hdr
             );
         if(!pkt_data) {
-            proc->pcap.reset();
+            if(!proc->is_device) {
+                proc->pcap.reset();
+            }
         } else {
             tuple_dupe_binary(
                 tdata
