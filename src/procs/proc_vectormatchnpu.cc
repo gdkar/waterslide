@@ -488,6 +488,8 @@ struct vectormatch_proc {
     int  status_size{1};
     bool label_members{}; /* 1 if we should labels matched members*/
     bool pass_all{}; /* 1 if we should labels matched members*/
+    bool flush_all{};
+    bool sync_all{};
     bool single_stream{};
     bool thread_running{};
     std::string device_name = "/dev/lrl_npu0";
@@ -509,7 +511,7 @@ struct vectormatch_proc {
     int process_flush   (wsdata_t*, ws_doutput_t*, int);
     int process_status  (wsdata_t*, ws_doutput_t*, int);
     int process_monitor (wsdata_t*, ws_doutput_t*, int);
-    int process_common  (wsdata_t*, ws_doutput_t*, int);
+    int process_common  (wsdata_t*, ws_doutput_t*, int, bool flush = false);
 
     proc_process_t input_set(
         wsdatatype_t * input_type
@@ -622,7 +624,7 @@ int vectormatch_proc::cmd_options(
     int F_opt = 0;
 //    pattern_id_label = wsregister_label(type_table,"PATTERN_ID");
 
-    while ((op = getopt(argc, argv, "SPm:B:s:r:R:E:D:C:q:v::F:L:O:M")) != EOF) {
+    while ((op = getopt(argc, argv, "SPm:B:s:r:R:E:D:C:q:v::F:f:L:O:M")) != EOF) {
         switch (op) {
           case 'S':{
                 single_stream = true;
@@ -727,6 +729,28 @@ int vectormatch_proc::cmd_options(
             case 's':{  /* labels an entire tuple and  matching members. */
                 tool_print("Registering container label '%s' for status tuples.", optarg);
                 status_label = wsregister_label(type_table, optarg);
+                break;
+            }
+            case 'f':{ /* load up the keyword file */
+            {
+                auto arg = int{};
+                std::istringstream{optarg} >> arg;
+                switch(arg) {
+                    default:
+                    case 0:
+                        sync_all = false;
+                        flush_all = false;
+                        break;
+                    case 1:
+                        sync_all = false;
+                        flush_all = true;
+                        break;
+                    case 2:
+                        sync_all = true;
+                        flush_all = true;
+                        break;
+                } 
+                }
                 break;
             }
             case 'F':{ /* load up the keyword file */
@@ -1250,9 +1274,9 @@ int vectormatch_proc::process_flush(wsdata_t *input_data, ws_doutput_t* dout, in
         npu_client_free(&client);
         npu_thread_stop(driver.get());
     }
-    return process_common(input_data,dout,type_index) || 1;
+    return process_common(input_data,dout,type_index, true) || 1;
 }
-int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* dout, int /*type_index*/)
+int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* dout, int /*type_index*/, bool flush)
 {
     auto found = false;
     while(!cb_queue.empty()) {
@@ -1260,8 +1284,12 @@ int vectormatch_proc::process_common(wsdata_t * /*input_data*/, ws_doutput_t* do
             cb_queue.pop_front();
         else {
             auto &qd = cb_queue.front()->front();
-            if(!qd.is_done.load())
-                break;
+            if(!qd.is_done.load()) {
+                if(!flush)
+                    break;
+                else
+                    continue;
+            }
             found = found || qd.nmatches;
             if(qd.nmatches && !got_match) {
                 status_incremental.hit_cnt++;
@@ -1410,12 +1438,14 @@ int vectormatch_proc::process_meta(wsdata_t *input_data, ws_doutput_t* dout, int
                 }
             }
         }
+        if(flush_all && submitted)
+            npu_client_flush(client);
     }
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++status_incremental.out_cnt;
     }
-    return process_common(input_data,dout,type_index) || 1;
+    return process_common(input_data,dout,type_index, sync_all && submitted) || 1;
 }
 
 /*-----------------------------------------------------------------------------
@@ -1504,12 +1534,14 @@ int vectormatch_proc::process_allstr(
                     npu_client_end_packet(client);
                 }
         }
+        if(flush_all && submitted)
+            npu_client_flush(client);
     }
     if((do_tag[type_index] || pass_all) && !submitted) {
         ws_set_outdata(input_data, outtype_tuple, dout);
       ++status_incremental.out_cnt;
     }
-    return process_common(input_data,dout,type_index) || 1;
+    return process_common(input_data,dout,type_index,sync_all&&submitted) || 1;
 }
 
 /*-----------------------------------------------------------------------------
